@@ -14,6 +14,10 @@ if [[ "${EUID}" -ne 0 ]]; then
   exit 1
 fi
 
+run_as_justra() {
+  (cd / && sudo -H -u justra env HOME=/home/justra "$@")
+}
+
 apt-get update
 apt-get install -y \
   git \
@@ -37,7 +41,7 @@ chmod 750 "${DATA_DIR}" "${LOG_DIR}" /etc/justra
 
 install -d -m 700 -o justra -g justra /home/justra/.ssh
 if [[ ! -f /home/justra/.ssh/id_ed25519 ]]; then
-  sudo -u justra ssh-keygen -t ed25519 -N "" -C "justra-azure-deploy" -f /home/justra/.ssh/id_ed25519
+  run_as_justra ssh-keygen -t ed25519 -N "" -C "justra-azure-deploy" -f /home/justra/.ssh/id_ed25519
   echo
   echo "Deploy key criada. Cadastre esta chave publica no GitHub como Deploy Key read-only do repo hjustra/justra:"
   echo
@@ -47,28 +51,28 @@ if [[ ! -f /home/justra/.ssh/id_ed25519 ]]; then
   exit 2
 fi
 
-sudo -u justra ssh-keyscan github.com >> /home/justra/.ssh/known_hosts 2>/dev/null || true
+run_as_justra ssh-keyscan github.com >> /home/justra/.ssh/known_hosts 2>/dev/null || true
 chown justra:justra /home/justra/.ssh/known_hosts
 chmod 600 /home/justra/.ssh/known_hosts
 
 if [[ ! -d "${APP_DIR}/.git" ]]; then
-  sudo -u justra git clone --branch "${BRANCH}" "${REPO_URL}" "${APP_DIR}"
+  run_as_justra git clone --branch "${BRANCH}" "${REPO_URL}" "${APP_DIR}"
 else
-  sudo -u justra git -C "${APP_DIR}" fetch origin
-  sudo -u justra git -C "${APP_DIR}" checkout "${BRANCH}"
-  sudo -u justra git -C "${APP_DIR}" pull --ff-only
+  run_as_justra git -C "${APP_DIR}" fetch origin
+  run_as_justra git -C "${APP_DIR}" checkout "${BRANCH}"
+  run_as_justra git -C "${APP_DIR}" pull --ff-only
 fi
 
-sudo -u justra python3 -m venv "${APP_DIR}/.venv"
-sudo -u justra "${APP_DIR}/.venv/bin/python" -m pip install --upgrade pip
-sudo -u justra "${APP_DIR}/.venv/bin/pip" install -r "${APP_DIR}/requirements.txt"
+run_as_justra python3 -m venv "${APP_DIR}/.venv"
+run_as_justra "${APP_DIR}/.venv/bin/python" -m pip install --upgrade pip
+run_as_justra "${APP_DIR}/.venv/bin/pip" install -r "${APP_DIR}/requirements.txt"
 
 if [[ ! -f "${NODE_RUNTIME_DIR}/package.json" ]]; then
-  sudo -u justra npm --prefix "${NODE_RUNTIME_DIR}" init -y
+  run_as_justra npm --prefix "${NODE_RUNTIME_DIR}" init -y
 fi
-sudo -u justra npm --prefix "${NODE_RUNTIME_DIR}" install playwright
+run_as_justra npm --prefix "${NODE_RUNTIME_DIR}" install playwright
 npm --prefix "${NODE_RUNTIME_DIR}" exec -- playwright install-deps chromium
-sudo -u justra env PLAYWRIGHT_BROWSERS_PATH="${NODE_RUNTIME_DIR}/browsers" \
+run_as_justra env PLAYWRIGHT_BROWSERS_PATH="${NODE_RUNTIME_DIR}/browsers" \
   npm --prefix "${NODE_RUNTIME_DIR}" exec -- playwright install chromium
 chown -R justra:justra "${NODE_RUNTIME_DIR}"
 
