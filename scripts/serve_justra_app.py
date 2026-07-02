@@ -3045,8 +3045,8 @@ class JustraApp:
         if formatted and formatted != process_number:
             candidates.append(formatted)
         return {
-            "size": 1,
-            "track_total_hits": False,
+            "size": 10,
+            "track_total_hits": True,
             "_source": self._datajud_source_fields(include_parties=True),
             "query": {
                 "bool": {
@@ -3241,6 +3241,87 @@ class JustraApp:
         )
         return process
 
+    def _compact_datajud_process_hits(
+        self,
+        hits: list[dict[str, Any]],
+        court: str,
+        previous: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        records = [self._compact_datajud_process(hit, court, previous=previous) for hit in hits]
+        records = [record for record in records if record.get("process_number")]
+        if not records:
+            return {}
+        if len(records) == 1:
+            return records[0]
+
+        primary = sorted(
+            records,
+            key=lambda record: (
+                str(record.get("last_movement_at") or ""),
+                int(record.get("movement_count") or 0),
+            ),
+            reverse=True,
+        )[0]
+        merged = copy.deepcopy(primary)
+        unique_movements: list[dict[str, Any]] = []
+        seen_movements: set[tuple[str, str, str, str]] = set()
+        for record in records:
+            for movement in record.get("movements") or []:
+                if not isinstance(movement, dict):
+                    continue
+                key = (
+                    str(movement.get("movement_code") or ""),
+                    str(movement.get("movement_name") or ""),
+                    str(movement.get("movement_date") or ""),
+                    str(movement.get("court_unit") or ""),
+                )
+                if key in seen_movements:
+                    continue
+                seen_movements.add(key)
+                unique_movements.append(copy.deepcopy(movement))
+        unique_movements.sort(key=lambda item: str(item.get("movement_date") or ""), reverse=True)
+        for index, movement in enumerate(unique_movements):
+            movement["movement_index"] = index
+
+        def unique_values(key: str) -> list[str]:
+            values: list[str] = []
+            for record in records:
+                value = clean_legal_text(record.get(key) or "")
+                if value and value not in values:
+                    values.append(value)
+            return values
+
+        old_ids = {
+            movement.get("id")
+            for movement in (previous or {}).get("movements", [])
+            if isinstance(movement, dict) and movement.get("id")
+        }
+        initial = not previous or previous.get("status") not in {"ok", "partial_error"}
+        new_ids = [movement["id"] for movement in unique_movements if movement.get("id") not in old_ids]
+        degrees = unique_values("degree")
+        class_names = unique_values("class_name")
+        court_units = unique_values("court_unit")
+        merged.update(
+            {
+                "degree": ", ".join(degrees),
+                "class_name": " / ".join(class_names[:3]),
+                "court_unit": " / ".join(court_units[:3]),
+                "related_degrees": degrees,
+                "related_classes": class_names,
+                "related_court_units": court_units,
+                "status": "ok",
+                "fetched_at": now_iso(),
+                "movement_count": len(unique_movements),
+                "last_movement_at": unique_movements[0]["movement_date"] if unique_movements else "",
+                "movements": unique_movements,
+                "movement_ids": [movement["id"] for movement in unique_movements if movement.get("id")],
+                "new_movement_count": 0 if initial else len(new_ids),
+                "last_incremental_at": now_iso() if (not initial and new_ids) else (previous or {}).get("last_incremental_at", ""),
+                "error": "",
+            }
+        )
+        return merged
+
     def _fetch_datajud_process(self, process_number: str, force: bool = False) -> dict[str, Any]:
         process_number = compact_process_number(process_number)
         if not process_number:
@@ -3290,7 +3371,7 @@ class JustraApp:
                         "movement_count": 0,
                     }
                 else:
-                    record = self._compact_datajud_process(hits[0], court, previous=previous)
+                    record = self._compact_datajud_process_hits(hits, court, previous=previous)
             except Exception as exc:  # noqa: BLE001
                 status = "error"
                 response = getattr(exc, "response", None)
