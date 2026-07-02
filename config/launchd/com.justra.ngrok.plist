@@ -1,0 +1,41 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.justra.ngrok</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>/usr/bin/caffeinate</string>
+    <string>-i</string>
+    <string>/opt/homebrew/bin/ngrok</string>
+    <string>http</string>
+    <string>127.0.0.1:8787</string>
+    <string>--url</string>
+    <string>https://justra.ngrok.app</string>
+    <string>--traffic-policy-file</string>
+    <string>/Users/heitordoamaraljurkovich/Desktop/justra/pesquisa/config/ngrok-traffic-policy.yml</string>
+    <string>--inspect=false</string>
+    <string>--log</string>
+    <string>/Users/heitordoamaraljurkovich/Desktop/justra/pesquisa/logs/ngrok-service.log</string>
+    <string>--log-format</string>
+    <string>logfmt</string>
+    <string>--log-level</string>
+    <string>info</string>
+  </array>
+  <key>WorkingDirectory</key>
+  <string>/Users/heitordoamaraljurkovich/Desktop/justra/pesquisa</string>
+  <key>RunAtLoad</key>
+  <true/>
+  <key>KeepAlive</key>
+  <true/>
+  <key>ThrottleInterval</key>
+  <integer>10</integer>
+  <key>ProcessType</key>
+  <string>Background</string>
+  <key>StandardOutPath</key>
+  <string>/Users/heitordoamaraljurkovich/Desktop/justra/pesquisa/logs/ngrok-launchd.log</string>
+  <key>StandardErrorPath</key>
+  <string>/Users/heitordoamaraljurkovich/Desktop/justra/pesquisa/logs/ngrok-launchd-error.log</string>
+</dict>
+</plist>

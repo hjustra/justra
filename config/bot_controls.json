@@ -1,0 +1,84 @@
+{
+  "version": 1,
+  "memory": {
+    "enabled": true,
+    "max_history": 12,
+    "inherited_fields": [
+      "period",
+      "claim_type",
+      "court_unit",
+      "judge_name",
+      "last_kind"
+    ]
+  },
+  "guardrails": [
+    {
+      "id": "grounded_numbers",
+      "enabled": true,
+      "severity": "block",
+      "rule": "Todo número deve sair do resultado determinístico do DuckDB."
+    },
+    {
+      "id": "no_full_text_inference_without_source",
+      "enabled": true,
+      "severity": "block",
+      "rule": "Não afirmar fundamento, prova, tese, precedente ou estilo de juiz sem full_text_documents."
+    },
+    {
+      "id": "scope_clarity",
+      "enabled": true,
+      "severity": "warn",
+      "rule": "Sempre explicitar recorte temporal, tribunal/unidade, pedido e se o resultado é proxy."
+    },
+    {
+      "id": "data_policy",
+      "enabled": true,
+      "severity": "block",
+      "rule": "Usar apenas dados públicos/autorizados e não orientar bypass de captcha, rate limit ou controle de acesso."
+    },
+    {
+      "id": "not_legal_advice",
+      "enabled": true,
+      "severity": "warn",
+      "rule": "Apresentar análise jurimétrica como apoio técnico, não garantia de resultado."
+    },
+    {
+      "id": "active_recent_legal_source",
+      "enabled": true,
+      "severity": "block",
+      "rule": "Ao falar de legislação, CLT, jurisprudência, súmula, OJ, precedente ou doutrina, mostrar a fonte ativa/não cancelada mais recente disponível e marcar fontes canceladas como históricas."
+    }
+  ],
+  "graders": [
+    {
+      "id": "answer_uses_tool_numbers",
+      "enabled": true,
+      "description": "Confere se a resposta contém os principais totais retornados pelo DuckDB."
+    },
+    {
+      "id": "answer_discloses_source_limits",
+      "enabled": true,
+      "description": "Confere se limitações de DataJud/inteiro teor aparecem quando relevantes."
+    },
+    {
+      "id": "answer_respects_full_text_gap",
+      "enabled": true,
+      "description": "Falha se a resposta afirma fundamento/prova/precedente sem inteiro teor carregado."
+    },
+    {
+      "id": "answer_includes_legal_source_links",
+      "enabled": true,
+      "description": "Confere se fontes jurídicas coletadas aparecem com hiperlink original."
+    },
+    {
+      "id": "answer_prioritizes_active_recent_source",
+      "enabled": true,
+      "description": "Confere se respostas jurídicas destacam a fonte ativa mais recente e o grafo histórico/relacional."
+    },
+    {
+      "id": "memory_context_available",
+      "enabled": true,
+      "description": "Indica quando a pergunta herdou período, pedido, vara ou tipo de análise."
+    }
+  ]
+}

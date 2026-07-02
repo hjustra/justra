@@ -1,0 +1,64 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Preview do documento · Justra</title>
+  <link rel="stylesheet" href="/assets/document-preview.css?v=brand-20260702a">
+</head>
+<body>
+  <div class="preview-app">
+    <header class="preview-header">
+      <div class="preview-title-area">
+        <a class="brand-pill" href="/processos" title="Voltar para a Justra">
+          <img src="/assets/justra-icon-128.png?v=20260702" alt="" aria-hidden="true">
+          <strong>Justra</strong>
+        </a>
+        <p class="eyebrow">Preview da versão</p>
+        <h1 id="previewTitle">Abrindo documento...</h1>
+        <p id="previewSubtitle" class="preview-subtitle">Carregando o conteúdo da versão selecionada.</p>
+        <div id="previewBadges" class="preview-badges" aria-live="polite">
+          <span class="badge muted">Preparando preview</span>
+        </div>
+      </div>
+      <div class="preview-actions" aria-label="Ações do documento">
+        <button id="closePreview" type="button" class="btn secondary">Fechar</button>
+        <button id="downloadVersion" type="button" class="btn secondary" disabled>Baixar versão</button>
+        <button id="promoteVersion" type="button" class="btn primary" disabled>Usar como principal</button>
+      </div>
+    </header>
+
+    <main class="preview-main">
+      <aside class="preview-sidebar" aria-label="Resumo da versão">
+        <section class="sidebar-card">
+          <p class="card-label">Status</p>
+          <strong id="versionStatus">Carregando</strong>
+          <span id="versionHint">Vamos mostrar o texto assim que a API responder.</span>
+        </section>
+        <section class="sidebar-card">
+          <p class="card-label">Documento</p>
+          <strong id="documentKind">DOCX/PDF</strong>
+          <span id="documentSize">Tamanho indisponível</span>
+        </section>
+        <section class="sidebar-card calm">
+          <p class="card-label">Atenção</p>
+          <span>Este preview é para conferência rápida. Revise o arquivo baixado antes de protocolar.</span>
+        </section>
+      </aside>
+
+      <section class="document-stage" aria-label="Conteúdo do documento">
+        <div id="previewNotice" class="notice info" role="status">Preparando uma visualização limpa do documento.</div>
+        <article class="paper" aria-live="polite">
+          <div id="documentContent" class="loading-state">
+            <span class="spinner" aria-hidden="true"></span>
+            <strong>Abrindo versão...</strong>
+            <small>Se demorar mais que alguns segundos, a página vai mostrar o erro em vez de travar.</small>
+          </div>
+        </article>
+      </section>
+    </main>
+  </div>
+
+  <script src="/assets/document-preview.js?v=document-preview-page-20260624d"></script>
+</body>
+</html>

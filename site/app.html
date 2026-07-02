@@ -1,0 +1,1210 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Justra - TRT2</title>
+  <link rel="stylesheet" href="/assets/app.css?v=brand-20260702a">
+</head>
+<body>
+  <section class="auth-screen" id="authScreen">
+    <div class="auth-copy">
+      <div class="brand">
+        <img class="brand-mark" src="/assets/justra-icon-128.png?v=20260702" alt="" aria-hidden="true">
+        <div>
+          <strong>Justra</strong>
+          <small>TRT2 local</small>
+        </div>
+      </div>
+      <h1>Entrar no acervo</h1>
+      <p>Acesso protegido à plataforma jurídica Justra.</p>
+    </div>
+    <div class="auth-card">
+      <div class="google-auth">
+        <button id="googleButton" type="button" class="google-button" disabled>
+          <span class="google-mark" aria-hidden="true">G</span>
+          <span>Continuar com Google</span>
+        </button>
+        <small id="googleHint">Verificando login seguro com Google...</small>
+      </div>
+      <div id="authMessage" class="auth-message"></div>
+    </div>
+  </section>
+
+  <div class="app-shell auth-locked">
+    <aside class="sidebar">
+      <div class="brand">
+        <img class="brand-mark" src="/assets/justra-icon-128.png?v=20260702" alt="" aria-hidden="true">
+        <div>
+          <strong>Justra</strong>
+          <small>TRT2 local</small>
+        </div>
+      </div>
+      <nav class="nav">
+        <button class="nav-item admin active" data-view="jurimetria" title="Jurimetria">
+          <span>Jurimetria</span>
+        </button>
+        <button class="nav-item" data-view="processos-v2" title="Processos acompanhados">
+          <span>Processos</span>
+          <small>Acompanhamento</small>
+        </button>
+        <button class="nav-item" data-view="document-analysis" title="Análise de documento ou peça">
+          <span>Análise de documento/peça</span>
+          <small>Upload e versões</small>
+        </button>
+        <button class="nav-item" data-view="entrevista" title="Entrevista gravada">
+          <span>Entrevista</span>
+          <small>Áudio → peça</small>
+        </button>
+        <button class="nav-item" data-view="chat" title="Pesquisa jurídica">
+          <span>Pesquisa jurídica</span>
+        </button>
+        <button class="nav-item" data-view="radar" title="Radar de teses">
+          <span>Radar</span>
+          <small id="navRadarCount">Teses e precedentes</small>
+        </button>
+        <button class="nav-item" data-view="billing" title="Assinatura">
+          <span>Assinatura</span>
+          <small id="navPlanName">Grátis</small>
+        </button>
+        <button class="nav-item admin" data-view="bot" title="Saúde do bot">
+          <span>Saúde do bot</span>
+        </button>
+        <button class="nav-item admin" data-view="mapa" title="Mapa de cobertura">
+          <span>Mapa de cobertura</span>
+        </button>
+        <button class="nav-item admin" data-view="coleta" title="Monitor de coleta">
+          <span>Coleta Falcão</span>
+          <small id="navCollectorState">D-1</small>
+        </button>
+        <button class="nav-item admin" data-view="djen" title="Coleta DJEN trabalhista">
+          <span>Coleta DJEN</span>
+          <small id="navDjenState">diário</small>
+        </button>
+        <button class="nav-item admin" data-view="sql" title="DuckDB SQL">
+          <span>DuckDB SQL</span>
+        </button>
+      </nav>
+      <section class="sidebar-conversations" id="sidebarConversations" aria-label="Conversas da pesquisa jurídica">
+        <div class="sidebar-section-head">
+          <h2>Conversas</h2>
+          <button id="newConversation" type="button">Nova</button>
+        </div>
+        <label class="conversation-search">
+          <span>Buscar</span>
+          <input id="conversationSearch" type="search" placeholder="pedido, vara, assunto ou ID">
+        </label>
+        <div id="conversationList" class="conversation-list"></div>
+      </section>
+      <div class="sidebar-foot">
+        <span class="dot"></span>
+        <span id="dbStatus">Conectando</span>
+        <button id="planShortcut" class="plan-shortcut" type="button">Ver plano</button>
+        <button id="logoutButton" class="logout-button" type="button">Sair</button>
+      </div>
+    </aside>
+
+    <main class="main">
+      <section class="view active" id="view-jurimetria">
+        <header class="page-head">
+          <div>
+            <p class="eyebrow">Acervo TRT2</p>
+            <h1>Jurimetria</h1>
+          </div>
+          <button class="icon-button" id="refreshJurimetrics" title="Atualizar">Atualizar</button>
+        </header>
+
+        <section class="filters panel">
+          <label>
+            <span>Período</span>
+            <select id="periodFilter"></select>
+          </label>
+          <label>
+            <span>Pedido</span>
+            <select id="claimFilter"></select>
+          </label>
+          <label>
+            <span>Vara/órgão</span>
+            <select id="courtFilter"></select>
+          </label>
+          <label>
+            <span>Juiz</span>
+            <select id="judgeFilter"></select>
+          </label>
+          <label>
+            <span>Desfecho</span>
+            <select id="outcomeFilter"></select>
+          </label>
+          <label class="search-field">
+            <span>Busca</span>
+            <input id="queryFilter" type="search" placeholder="processo, assunto, vara">
+          </label>
+        </section>
+
+        <section class="metric-grid" id="summaryCards"></section>
+
+        <section class="split">
+          <div class="panel">
+            <div class="section-head">
+              <h2>Desfechos</h2>
+            </div>
+            <div id="outcomeBars" class="bar-list"></div>
+          </div>
+          <div class="panel">
+            <div class="section-head">
+              <h2>Pedidos</h2>
+            </div>
+            <div id="claimBars" class="bar-list"></div>
+          </div>
+        </section>
+
+        <section class="split">
+          <div class="panel">
+            <div class="section-head">
+              <h2>Assuntos</h2>
+            </div>
+            <div id="subjectBars" class="bar-list"></div>
+          </div>
+          <div class="panel">
+            <div class="section-head">
+              <h2>Varas/órgãos</h2>
+            </div>
+            <div id="courtBars" class="bar-list"></div>
+          </div>
+        </section>
+
+        <section class="panel">
+          <div class="section-head">
+            <h2>Pedido x desfecho</h2>
+          </div>
+          <div class="table-wrap">
+            <table>
+              <thead><tr><th>Pedido</th><th>Desfecho</th><th>Processos</th></tr></thead>
+              <tbody id="outcomeByClaimTable"></tbody>
+            </table>
+          </div>
+        </section>
+
+        <section class="panel">
+          <div class="section-head">
+            <h2>Processos</h2>
+            <div class="pager">
+              <button id="prevPage">Anterior</button>
+              <span id="pageInfo">0-0</span>
+              <button id="nextPage">Próxima</button>
+            </div>
+          </div>
+          <div class="table-wrap process-table">
+            <table>
+              <thead>
+                <tr>
+                  <th>Processo</th>
+                  <th>Vara/órgão</th>
+                  <th>Classe</th>
+                  <th>Pedidos</th>
+                  <th>Assuntos</th>
+                  <th>Ajuizado</th>
+                  <th>Desfecho</th>
+                  <th>Inteiro teor</th>
+                  <th>Juiz</th>
+                </tr>
+              </thead>
+              <tbody id="processTable"></tbody>
+            </table>
+          </div>
+        </section>
+      </section>
+
+      <section class="view" id="view-processos-v2">
+        <header class="page-head">
+          <div>
+            <p class="eyebrow">Processos acompanhados</p>
+            <h1>Processos</h1>
+            <p class="page-lead">Uma lista única para cadastrar processo, ver prazo, novidade, risco e abrir o dossiê atual.</p>
+          </div>
+          <div class="page-actions">
+            <button class="icon-button subtle" id="installPjeExtension" type="button" disabled>Extensão PJe</button>
+            <button class="icon-button subtle" id="refreshProcessCenter" type="button">Atualizar</button>
+          </div>
+        </header>
+
+        <section class="panel process-center-add">
+          <form id="processCenterAddForm" class="process-center-add-form">
+            <label>
+              <span>Número do processo</span>
+              <input id="processCenterNumber" placeholder="0000000-00.0000.5.00.0000" inputmode="numeric">
+            </label>
+            <button type="submit">Adicionar e abrir PJe</button>
+          </form>
+          <p id="processCenterStatus" class="muted">Ao adicionar, abrimos o PJe para você resolver o CAPTCHA e a extensão enviar documentos/movimentos; DJEN e DataJud seguem em paralelo.</p>
+        </section>
+
+        <section class="panel">
+          <div class="section-head">
+            <div><h2>Processos acompanhados</h2><span id="processCenterMeta" class="muted">Carregando...</span></div>
+          </div>
+          <div class="table-wrap process-center-table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>Processo</th>
+                  <th>Data</th>
+                  <th>Tribunal</th>
+                  <th>Tipo</th>
+                  <th>Parte intimada</th>
+                  <th>Última novidade</th>
+                  <th>Risco</th>
+                  <th>Ações</th>
+                </tr>
+              </thead>
+              <tbody id="processCenterRows"></tbody>
+            </table>
+          </div>
+          <div id="processCenterTimelinePanel"></div>
+        </section>
+
+        <section class="panel">
+          <div class="section-head">
+            <div><h2>Novos casos</h2><span class="muted">Entrevista, coleta de documentos e análise antes do número CNJ.</span></div>
+            <button class="icon-button subtle" id="processCenterNewCase" type="button">Novo caso</button>
+          </div>
+          <div class="table-wrap process-center-table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>Dossiê</th>
+                  <th>Fase</th>
+                  <th>Última atividade</th>
+                  <th>Arquivos</th>
+                  <th>Ações</th>
+                </tr>
+              </thead>
+              <tbody id="processCenterNewCaseRows"></tbody>
+            </table>
+          </div>
+        </section>
+      </section>
+
+      <section class="view" id="view-processos">
+        <header class="page-head">
+          <div>
+            <p class="eyebrow">Workspace jurídico</p>
+            <h1>Processos</h1>
+            <p class="page-lead">Organize fatos, documentos, pedidos, riscos e versões dentro de uma única sessão.</p>
+          </div>
+        </header>
+
+        <div id="caseListView">
+          <section class="case-hero panel case-start-hero">
+            <div>
+              <span class="case-hero-kicker">Novo processo</span>
+              <h2>Começar por chat guiado</h2>
+              <p>A Justra pergunta o essencial para estruturar fatos, documentos, pedidos e próximos passos.</p>
+            </div>
+            <div class="case-start-cards" aria-label="Formas de começar">
+              <button class="case-start-card" type="button" data-case-start="new">
+                <span>1</span>
+                <strong>Novo processo</strong>
+                <small>Abra um chat guiado. Se ainda não houver relato organizado, a Justra também sugere gravar uma entrevista.</small>
+              </button>
+            </div>
+          </section>
+
+          <section class="new-case-panel panel hidden case-start-flow" id="newCasePanel">
+            <div class="section-head">
+              <div><p class="eyebrow" id="caseStartPanelKicker">Próximo passo</p><h2 id="caseStartPanelTitle">Começar</h2><span class="muted" id="caseStartPanelLead"></span></div>
+              <div class="new-case-panel-actions">
+                <button class="case-back" id="backToProcessCenterFromNewCase" type="button">← Todos os processos</button>
+                <button id="closeNewCase" type="button">Cancelar</button>
+              </div>
+            </div>
+
+            <div id="documentStartPanel" class="case-start-pane hidden">
+              <div class="start-guidance">
+                <strong>Vamos abrir o espaço de upload.</strong>
+                <p>Na próxima tela, arraste o arquivo principal. Depois o chat aparece com opções para resumir, revisar, pedir jurisprudência, gerar nova versão, baixar e marcar a versão principal.</p>
+              </div>
+              <button class="primary-start-button" id="startDocumentAnalysis" type="button">Abrir upload do documento</button>
+              <p id="documentStartStatus" class="save-status"></p>
+            </div>
+
+            <form id="existingCaseForm" class="case-form-grid case-start-pane hidden">
+              <div class="process-link-import full">
+                <div>
+                  <span class="import-kicker">Processo já existe?</span>
+                  <h3>Cole o link da consulta oficial</h3>
+                  <p>A Justra abre o PJe/consulta pública em outra aba para você resolver o CAPTCHA manualmente. Depois use a extensão Justra PJe para enviar documentos e movimentos ao dossiê, sem tentativa de quebra de CAPTCHA.</p>
+                </div>
+                <label><span>Link do processo</span><input id="newCaseProcessUrl" type="url" placeholder="https://pje.trt2.jus.br/consultaprocessual/detalhe-processo/..."></label>
+                <div class="process-link-actions">
+                  <button id="openProcessCaptcha" type="button">Abrir consulta e resolver CAPTCHA</button>
+                  <small id="processLinkHint">Opcional. Se o link tiver número CNJ, nós preenchemos o campo automaticamente.</small>
+                </div>
+              </div>
+              <div class="zip-guidance full">
+                <div>
+                  <span class="import-kicker">Fallback opcional</span>
+                  <h3>Anexe ZIP/PDF se já tiver baixado</h3>
+                  <p>A extensão é o caminho principal para trazer documentos e movimentos do PJe. Se você já tiver um ZIP/PDF exportado, pode anexar aqui também para preservar no dossiê.</p>
+                </div>
+                <label class="case-upload-zone compact" for="existingCaseZip">
+                  <input id="existingCaseZip" type="file" accept=".zip,.pdf,.doc,.docx,.txt,application/zip,application/pdf">
+                  <span class="upload-mark">↑</span>
+                  <strong>Escolher ZIP/PDF dos autos</strong>
+                  <small>Opcional agora, mas recomendado para organizar o caso</small>
+                  <em id="existingZipSelection">Nenhum arquivo selecionado</em>
+                </label>
+              </div>
+              <label class="full"><span>Nome interno do caso</span><input id="newCaseTitle" maxlength="180" placeholder="Opcional; usamos o número do processo se vazio"></label>
+              <div class="case-form-actions full"><small>Depois de criar, abriremos o dossiê para você conferir os arquivos e conversar com a Justra.</small><button type="submit">Criar dossiê do processo</button></div>
+              <p id="newCaseStatus" class="save-status full"></p>
+            </form>
+
+            <div id="newProcessStartPanel" class="case-start-pane hidden">
+              <div class="start-guidance">
+                <strong>Vamos abrir um chat guiado.</strong>
+                <p>A Justra vai perguntar quem é o cliente, contra quem será o processo, datas, salário, jornada, documentos e riscos. Se ainda não houver relato organizado, ela também vai sugerir gravar uma entrevista.</p>
+                <p>Você também poderá subir arquivos já existentes, como conversa de WhatsApp, contrato, holerites, TRCT ou prints.</p>
+              </div>
+              <button class="primary-start-button" id="startGuidedNewCase" type="button">Começar chat guiado</button>
+              <p id="newProcessStartStatus" class="save-status"></p>
+            </div>
+          </section>
+
+          <section class="case-summary-grid hidden" id="caseSummaryCards"></section>
+
+          <section class="case-list-toolbar">
+            <div><h2>Continue de onde parou</h2><span id="caseListMeta" class="muted">Carregando...</span></div>
+            <label class="case-search"><span>Buscar</span><input id="caseSearch" type="search" placeholder="Parte, número ou tipo de sessão"></label>
+          </section>
+          <section class="case-card-grid" id="caseCards"></section>
+        </div>
+
+        <div id="caseWorkspace" class="hidden">
+          <button class="case-back" id="backToCases" type="button">← Todos os processos</button>
+          <section class="case-workspace-head panel">
+            <div>
+              <div class="case-workspace-badges"><span id="caseTypeBadge"></span><span id="caseStatusBadge"></span></div>
+              <h2 id="caseWorkspaceTitle">Processo</h2>
+              <p id="caseWorkspaceMeta"></p>
+            </div>
+            <div class="case-next-action"><span>Próxima ação sugerida</span><strong id="caseNextAction">Completar os dados básicos</strong><button id="caseNextActionButton" type="button">Ir para esta etapa →</button></div>
+          </section>
+
+          <nav class="case-tabs" aria-label="Áreas do processo">
+            <button class="active" data-case-tab="overview" type="button">Início</button>
+            <button data-case-tab="documents" type="button">Arquivos</button>
+            <button data-case-tab="matrix" data-case-advanced type="button">Pedidos e riscos</button>
+            <button data-case-tab="pieces" data-case-advanced type="button">Peças e versões</button>
+            <button data-case-tab="copilot" type="button">Análise</button>
+            <button data-case-tab="activity" type="button">Histórico</button>
+          </nav>
+
+          <section id="caseTutorial" class="case-tutorial panel hidden" aria-label="Como usar a revisão documental">
+            <div><span class="tutorial-kicker">Como funciona</span><h2>Da entrada do arquivo à versão revisada</h2><p>Você não precisa configurar nada. A Justra conduz as três etapas.</p></div>
+            <ol>
+              <li data-tutorial-step="upload"><span>1</span><div><strong>Envie</strong><small>PDF, DOCX, imagem ou texto</small></div></li>
+              <li data-tutorial-step="analyze"><span>2</span><div><strong>Escolha a análise</strong><small>Resumo, riscos, pontos ou comparação</small></div></li>
+              <li data-tutorial-step="version"><span>3</span><div><strong>Baixe ou atualize</strong><small>Preserve o original e anexe a próxima versão</small></div></li>
+            </ol>
+          </section>
+
+          <div class="case-tab-pane active" id="case-tab-overview">
+            <section id="caseGuidance" class="case-guidance panel"></section>
+            <section class="case-overview-grid">
+              <div class="panel"><div class="section-head"><h2>Saúde do dossiê</h2><span id="caseHealthLabel" class="muted"></span></div><div id="caseHealth" class="case-health"></div></div>
+              <div class="panel"><div class="section-head"><h2>Próximas tarefas</h2></div><div id="caseTasks" class="case-task-list"></div><form id="caseTaskForm" class="inline-case-form"><input id="caseTaskInput" placeholder="Nova tarefa"><button type="submit">Adicionar</button></form></div>
+            </section>
+            <section class="split">
+              <div class="panel"><div class="section-head"><h2>Linha do tempo dos fatos</h2></div><div id="caseTimeline" class="case-timeline"></div><form id="timelineForm" class="timeline-form"><input id="timelineDate" type="date"><input id="timelineLabel" placeholder="Descreva o fato relevante" required><button type="submit">Adicionar</button></form></div>
+              <div class="panel"><div class="section-head"><h2>Checklist documental</h2><span id="caseChecklistMeta" class="muted"></span></div><div id="caseChecklist" class="case-checklist"></div></div>
+            </section>
+          </div>
+
+          <div class="case-tab-pane" id="case-tab-documents">
+            <section class="panel">
+              <div class="section-head"><div><h2>Arquivos deste processo</h2><span class="muted">Envie o original. Assim que terminar, abrimos a análise automaticamente.</span></div><button id="toggleDocumentForm" type="button">Adicionar arquivo</button></div>
+              <div class="document-steps" aria-label="Etapas do documento"><article class="active"><span>1</span><div><strong>Enviar</strong><small>PDF ou arquivo original</small></div></article><i>→</i><article><span>2</span><div><strong>Classificar</strong><small>Tipo, período e parte</small></div></article><i>→</i><article><span>3</span><div><strong>Analisar</strong><small>Resumo, riscos e provas</small></div></article></div>
+              <form id="documentForm" class="case-form-grid compact case-upload-form">
+                <label class="case-upload-zone full" id="caseUploadZone" for="caseDocumentFile">
+                  <input id="caseDocumentFile" type="file" multiple accept=".pdf,.doc,.docx,.png,.jpg,.jpeg,.txt,.zip,application/pdf,application/zip">
+                  <span class="upload-mark">↑</span>
+                  <strong>Escolha os documentos dos autos ou arraste tudo para cá</strong>
+                  <small>PDF, DOC, DOCX, PNG, JPG, TXT ou ZIP · até 40 MB por arquivo</small>
+                  <em id="caseFileSelection">Nenhum arquivo selecionado</em>
+                </label>
+                <div class="document-classification full"><strong>Como este arquivo deve entrar no dossiê?</strong><small>Esses dados ajudam o Copilot a localizar a fonte certa depois da análise.</small></div>
+                <label><span>Nome do arquivo</span><input id="documentName" placeholder="Preenchido automaticamente" readonly required></label>
+                <label><span>Tipo</span><select id="documentType"><option>Petição inicial</option><option>Contestação</option><option>Cartão de ponto</option><option>Holerite</option><option>TRCT</option><option>FGTS</option><option>WhatsApp</option><option>Contrato</option><option>Outro</option></select></label>
+                <label><span>Período</span><input id="documentPeriod" placeholder="Ex.: jan/2024 a dez/2024"></label>
+                <label><span>Parte relacionada</span><select id="documentParty"><option>Caso</option><option>Reclamante</option><option>Reclamada</option></select></label>
+                <label class="full"><span>Observação</span><textarea id="documentNote" placeholder="Contexto, páginas importantes ou pendências"></textarea></label>
+                <div class="case-form-actions full"><small>O arquivo será salvo com acesso restrito e preparado para a análise.</small><button id="documentSubmit" type="submit">Enviar e abrir análise</button></div>
+                <p id="documentUploadStatus" class="upload-status full" role="status"></p>
+              </form>
+              <div id="documentAreaStatus" class="document-area-status hidden" role="status"></div>
+              <div id="caseDocuments" class="case-document-grid"></div>
+            </section>
+            <section class="panel case-interview-panel hidden" id="caseInterviewPanel">
+              <div class="section-head"><div><h2>Entrevistas do processo</h2><span class="muted">Áudio original e transcrição completa preservados no dossiê.</span></div></div>
+              <div id="caseInterviews" class="case-interview-grid"></div>
+            </section>
+          </div>
+
+          <div class="case-tab-pane" id="case-tab-matrix">
+            <section class="panel">
+              <div class="section-head"><div><h2>Matriz de pedidos e riscos</h2><span class="muted">Fato → prova → pedido → tese → peça.</span></div><button id="toggleClaimForm" type="button">Adicionar pedido</button></div>
+              <form id="claimForm" class="case-form-grid compact hidden">
+                <label><span>Pedido</span><input id="claimTitle" placeholder="Ex.: Horas extras" required></label>
+                <label><span>Risco inicial</span><select id="claimRisk"><option>Baixo</option><option selected>Médio</option><option>Alto</option><option>Crítico</option></select></label>
+                <label class="full"><span>Base fática</span><textarea id="claimFactualBasis" placeholder="O que aconteceu e em qual período?"></textarea></label>
+                <label><span>Tese jurídica</span><textarea id="claimTheory" placeholder="Fundamento a ser desenvolvido"></textarea></label>
+                <label><span>Motivo do risco</span><textarea id="claimRiskReason" placeholder="Provas faltantes, contradições ou defesa provável"></textarea></label>
+                <div class="case-form-actions full"><button type="submit">Incluir na matriz</button></div>
+              </form>
+              <div id="caseClaims" class="case-claim-list"></div>
+            </section>
+          </div>
+
+          <div class="case-tab-pane" id="case-tab-pieces">
+            <section class="case-piece-layout">
+              <div class="panel"><div class="section-head"><h2>Peças e versões</h2></div><div id="casePieces" class="case-piece-list"></div></div>
+              <form id="pieceForm" class="panel piece-editor">
+                <div class="section-head"><h2>Nova versão</h2><span class="muted">Revisão humana obrigatória</span></div>
+                <label><span>Tipo de peça</span><select id="pieceType"><option>Petição inicial</option><option>Contestação</option><option>Réplica</option><option>Manifestação</option><option>Recurso ordinário</option><option>Contrarrazões</option><option>Acordo</option></select></label>
+                <label><span>Nota da alteração</span><input id="pieceChangeNote" placeholder="Ex.: reforçada tese de horas extras"></label>
+                <label><span>Conteúdo</span><textarea id="pieceContent" class="piece-content" placeholder="Cole ou redija a peça aqui..." required></textarea></label>
+                <label class="ai-assisted"><input id="pieceAiAssisted" type="checkbox" checked><span>Versão teve assistência de IA</span></label>
+                <button type="submit">Salvar nova versão</button>
+                <small>Esta é uma sugestão de trabalho. Revise fatos, documentos, fundamentos, valores e estratégia antes de protocolar.</small>
+              </form>
+            </section>
+          </div>
+
+          <div class="case-tab-pane" id="case-tab-copilot">
+            <section class="panel case-copilot">
+              <div class="section-head"><div><h2 id="caseCopilotTitle">Análise do processo</h2><span id="caseCopilotSubtitle" class="muted">Escolha uma ação ou faça sua própria pergunta.</span></div><span class="case-context-badge">Contexto isolado</span></div>
+              <div id="caseAnalysisDocument" class="analysis-document hidden"></div>
+              <div id="caseInterviewQuick" class="case-interview-quick hidden"></div>
+              <div id="caseAnalysisActions" class="analysis-action-section">
+                <div><span class="tutorial-kicker">O que você quer fazer?</span><p>Escolha uma opção para começar. Você poderá continuar conversando depois.</p></div>
+                <div class="copilot-prompts"></div>
+              </div>
+              <p id="caseAnalysisNotice" class="analysis-notice hidden"></p>
+              <div id="caseChatMessages" class="case-chat-messages"></div>
+              <form id="caseChatForm" class="case-chat-form"><textarea id="caseChatInput" placeholder="Escreva o que deseja saber sobre este documento..."></textarea><button type="submit">Enviar</button></form>
+              <input id="caseVersionFile" class="hidden" type="file" accept=".pdf,.doc,.docx,.png,.jpg,.jpeg,.txt,application/pdf">
+            </section>
+          </div>
+
+          <div class="case-tab-pane" id="case-tab-activity">
+            <section class="panel"><div class="section-head"><div><h2>Histórico auditável</h2><span class="muted">Cada inclusão e nova versão fica registrada.</span></div></div><div id="caseActivity" class="case-activity-list"></div></section>
+          </div>
+        </div>
+      </section>
+
+      <section class="view" id="view-document-analysis">
+        <header class="page-head">
+          <div>
+            <p class="eyebrow">Documentos e peças</p>
+            <h1>Análise de documento/peça</h1>
+            <p class="page-lead">Entrada dedicada para revisar petições, contratos, PDFs, DOCX e versões de trabalho.</p>
+          </div>
+          <div class="page-actions">
+            <button class="icon-button subtle" id="refreshDocumentAnalysis" type="button">Atualizar</button>
+          </div>
+        </header>
+
+        <section class="panel document-analysis-hub">
+          <div>
+            <h2>Nova análise</h2>
+            <p>Crie um dossiê de análise e siga no fluxo atual com Arquivos, Análise, Peças e Histórico.</p>
+          </div>
+          <button id="startDocumentAnalysisHub" type="button">Abrir upload do documento</button>
+        </section>
+
+        <section class="panel">
+          <div class="section-head">
+            <div><h2>Análises em andamento</h2><span id="documentAnalysisMeta" class="muted">Carregando...</span></div>
+          </div>
+          <div class="table-wrap process-center-table-wrap">
+            <table>
+              <thead><tr><th>Dossiê</th><th>Tipo</th><th>Última atividade</th><th>Arquivos</th><th>Ações</th></tr></thead>
+              <tbody id="documentAnalysisRows"></tbody>
+            </table>
+          </div>
+        </section>
+      </section>
+
+      <section class="view" id="view-updates">
+        <header class="page-head">
+          <div>
+            <p class="eyebrow">DataJud + DJEN trabalhista</p>
+            <h1>Atualizações</h1>
+            <p class="page-lead">Timeline DataJud e publicações oficiais dos processos acompanhados, com prioridade para atos que pedem providência.</p>
+          </div>
+          <div class="page-actions">
+            <button class="icon-button subtle" id="refreshDatajud" type="button">Atualizar DataJud</button>
+            <button class="icon-button subtle" id="refreshUpdates" type="button">Atualizar</button>
+          </div>
+        </header>
+
+        <section class="metric-grid" id="updateCards"></section>
+
+        <section class="updates-action-grid">
+          <form class="panel update-watch-panel" id="updateWatchForm">
+            <div class="section-head">
+              <div><h2>Acompanhar processo</h2><span class="muted">Vale para atualizações e prazos</span></div>
+              <button type="submit">Acompanhar</button>
+            </div>
+            <label><span>Número do processo</span><input id="updateWatchProcessNumber" placeholder="0000000-00.0000.5.00.0000" inputmode="numeric"></label>
+            <p id="updateWatchStatus" class="muted"></p>
+          </form>
+
+          <form class="panel update-lawyer-panel" id="movementLawyerForm">
+            <div class="section-head">
+              <div><h2>Buscar por advogado</h2><span class="muted">DataJud por OAB/nome</span></div>
+              <button type="submit">Buscar e acompanhar</button>
+            </div>
+            <div class="movement-lawyer-fields">
+              <label><span>Nome</span><input id="movementLawyerName" placeholder="Nome do advogado"></label>
+              <label><span>OAB</span><input id="movementLawyerOab" placeholder="Número"></label>
+              <label><span>UF</span><input id="movementLawyerUf" maxlength="2" placeholder="SP"></label>
+            </div>
+            <p id="movementLawyerStatus" class="muted"></p>
+          </form>
+        </section>
+
+        <section class="panel">
+          <div class="section-head"><div><h2>Processos monitorados</h2><span id="updateSourceMeta" class="muted"></span></div><span id="updateWatchMeta" class="muted"></span></div>
+          <div class="table-wrap deadline-table-wrap">
+            <table>
+              <thead><tr><th>Processo</th><th>Origem</th><th>Última novidade</th><th>Total</th><th>Timeline</th></tr></thead>
+              <tbody id="updateWatchRows"></tbody>
+            </table>
+          </div>
+          <div id="updateTimelinePanel"></div>
+        </section>
+      </section>
+
+      <section class="view" id="view-deadlines">
+        <header class="page-head">
+          <div>
+            <p class="eyebrow">DJEN trabalhista</p>
+            <h1>Prazos</h1>
+            <p class="page-lead">Processos acompanhados, prazos extraídos do diário e busca por advogado.</p>
+          </div>
+          <div class="page-actions">
+            <button class="icon-button subtle" id="refreshDeadlines" type="button">Atualizar</button>
+          </div>
+        </header>
+
+        <section class="metric-grid" id="deadlineCards"></section>
+
+        <section class="deadline-action-grid">
+          <form class="panel deadline-tool" id="deadlineWatchForm">
+            <div class="section-head">
+              <div><h2>Acompanhar processo</h2><span class="muted">CNJ trabalhista</span></div>
+              <button type="submit">Acompanhar</button>
+            </div>
+            <label><span>Número do processo</span><input id="deadlineWatchProcessNumber" placeholder="0000000-00.0000.5.00.0000" inputmode="numeric"></label>
+            <p id="deadlineWatchStatus" class="muted"></p>
+          </form>
+
+          <form class="panel deadline-tool" id="lawyerDeadlineForm">
+            <div class="section-head">
+              <div><h2>Buscar por advogado</h2><span class="muted">Nome e OAB para homônimos</span></div>
+              <button type="submit">Pesquisar</button>
+            </div>
+            <div class="deadline-lawyer-fields">
+              <label><span>Nome</span><input id="lawyerDeadlineName" placeholder="Nome do advogado"></label>
+              <label><span>OAB</span><input id="lawyerDeadlineOab" placeholder="Número"></label>
+              <label><span>UF</span><input id="lawyerDeadlineUf" maxlength="2" placeholder="SP"></label>
+            </div>
+            <p id="lawyerDeadlineStatus" class="muted"></p>
+          </form>
+        </section>
+
+        <section class="panel">
+          <div class="section-head"><h2>Processos acompanhados</h2><span id="deadlineWatchMeta" class="muted"></span></div>
+          <div class="table-wrap deadline-table-wrap">
+            <table>
+              <thead><tr><th>Processo</th><th>Origem</th><th>Próximo prazo/data</th><th>Risco</th><th>Prazos / datas</th></tr></thead>
+              <tbody id="deadlineWatchRows"></tbody>
+            </table>
+          </div>
+        </section>
+
+        <section class="panel">
+          <div class="section-head"><h2>Prazos dos processos</h2><span id="deadlineRowsMeta" class="muted"></span></div>
+          <div class="table-wrap deadline-table-wrap">
+            <table>
+              <thead><tr><th>Prazo</th><th>Processo</th><th>Tribunal</th><th>Parte intimada</th><th>Ato</th><th>Risco</th><th>Trecho</th></tr></thead>
+              <tbody id="deadlineRows"></tbody>
+            </table>
+          </div>
+        </section>
+
+        <section class="panel">
+          <div class="section-head"><h2>Datas de audiência e pauta</h2><span id="deadlineCalendarMeta" class="muted"></span></div>
+          <div class="table-wrap deadline-table-wrap">
+            <table>
+              <thead><tr><th>Data</th><th>Processo</th><th>Tribunal</th><th>Tipo</th><th>Parte intimada</th><th>Risco</th></tr></thead>
+              <tbody id="deadlineCalendarRows"></tbody>
+            </table>
+          </div>
+        </section>
+
+        <section class="panel">
+          <div class="section-head"><h2>Resultado por advogado</h2><span id="lawyerDeadlineMeta" class="muted">Aguardando pesquisa.</span></div>
+          <div class="table-wrap deadline-table-wrap">
+            <table>
+              <thead><tr><th>Prazo/data</th><th>Processo</th><th>Advogado</th><th>Tribunal</th><th>Ato</th><th>Risco</th></tr></thead>
+              <tbody id="lawyerDeadlineRows"><tr><td colspan="6" class="muted">Pesquise por nome e, se possível, OAB/UF.</td></tr></tbody>
+            </table>
+          </div>
+        </section>
+      </section>
+
+      <section class="view" id="view-entrevista">
+        <header class="page-head">
+          <div>
+            <p class="eyebrow">Atendimento jurídico</p>
+            <h1>Entrevista gravada</h1>
+            <p class="page-lead">Grave a conversa com o cliente, transcreva e transforme em linha do tempo, documentos faltantes e minuta de peça.</p>
+          </div>
+          <button class="icon-button subtle" id="refreshInterviewCases" type="button">Atualizar processos</button>
+        </header>
+
+        <section class="interview-layout">
+          <div class="panel interview-recorder">
+            <div class="section-head">
+              <div><h2>Gravação</h2><span class="muted">Microfone do computador · permissão explícita</span></div>
+              <span id="interviewRecordingBadge" class="recording-badge idle">Parado</span>
+            </div>
+
+            <div class="interview-consent">
+              <strong>Antes de gravar</strong>
+              <p>Confirme o consentimento do cliente. A gravação pode conter dados sensíveis e material protegido por sigilo profissional. Nada começa automaticamente.</p>
+            </div>
+
+            <div class="interview-fields">
+              <label><span>Processo/dossiê</span><select id="interviewCaseSelect"></select></label>
+              <label><span>Se criar novo dossiê</span><input id="interviewNewCaseTitle" placeholder="Ex.: Entrevista Maria Silva"></label>
+              <label><span>Você atua por quem?</span><select id="interviewSide"><option value="">Ainda não sei</option><option value="claimant">Reclamante</option><option value="defendant">Reclamado</option></select></label>
+            </div>
+            <p class="interview-hint">Escolha um dossiê existente ou deixe em branco para criar um novo automaticamente após a gravação.</p>
+
+            <div class="recorder-face">
+              <div class="recording-orb" id="recordingOrb" aria-hidden="true"></div>
+              <div>
+                <strong id="recordingTimer">00:00</strong>
+                <span id="recordingHint">Clique em permitir microfone para começar o teste.</span>
+              </div>
+            </div>
+
+            <div class="recorder-actions">
+              <button id="startInterviewRecording" type="button">Permitir microfone e gravar</button>
+              <button id="stopInterviewRecording" type="button" disabled>Parar gravação</button>
+              <button id="discardInterviewRecording" type="button" disabled>Descartar</button>
+              <button id="uploadInterviewRecording" class="primary" type="button" disabled>Transcrever e abrir chat</button>
+            </div>
+            <p id="interviewStatus" class="save-status" role="status"></p>
+          </div>
+
+          <aside class="panel interview-next">
+            <div class="section-head"><h2>O que a Justra faz depois</h2></div>
+            <ol>
+              <li><span>1</span><div><strong>Transcreve</strong><small>Português jurídico, preservando datas, valores e nomes.</small></div></li>
+              <li><span>2</span><div><strong>Estrutura</strong><small>Linha do tempo, documentos faltantes, riscos e matriz fato → prova.</small></div></li>
+              <li><span>3</span><div><strong>Sugere peça</strong><small>Petição inicial, contestação, réplica ou checklist de entrevista complementar.</small></div></li>
+            </ol>
+            <p>Para este MVP, o limite é 25 MB por gravação. Em entrevista longa, pare por blocos.</p>
+          </aside>
+        </section>
+      </section>
+
+      <section class="view" id="view-chat">
+        <header class="page-head">
+          <div>
+            <p class="eyebrow">Acervo + memória</p>
+            <h1>Pesquisa jurídica</h1>
+          </div>
+          <div class="page-actions">
+            <button class="icon-button subtle" id="toggleAudit" type="button" title="Abrir auditoria">Auditoria</button>
+            <button class="icon-button" id="clearChat" type="button" title="Limpar memória">Limpar memória</button>
+          </div>
+        </header>
+        <section class="chat-layout">
+          <div class="panel chat-panel">
+            <button class="chat-quota" id="chatQuota" type="button" aria-label="Abrir detalhes da assinatura">
+              <span id="chatQuotaLabel">Carregando uso...</span>
+              <span class="mini-progress"><span id="chatQuotaProgress"></span></span>
+            </button>
+            <div id="memoryPills" class="pills"></div>
+            <div id="messages" class="messages">
+              <div class="message assistant">Pronto. Pergunte por pedido, período, vara, desfecho ou peça uma continuação do assunto anterior.</div>
+            </div>
+            <form id="chatForm" class="chat-form">
+              <textarea id="chatInput" placeholder="Ex.: No último mês, quantos processos de hora extra foram julgados?"></textarea>
+              <button type="submit">Perguntar</button>
+            </form>
+          </div>
+          <aside class="panel side-panel audit-panel hidden" id="auditPanel" aria-label="Auditoria da última resposta">
+            <div class="section-head">
+              <h2>Auditoria da última resposta</h2>
+              <button id="closeAudit" type="button">Fechar</button>
+            </div>
+            <div id="lastGraders" class="grader-list"></div>
+          </aside>
+        </section>
+      </section>
+
+      <section class="view" id="view-billing">
+        <header class="page-head billing-head">
+          <div>
+            <p class="eyebrow">Plano e uso</p>
+            <h1>Assinatura</h1>
+            <p class="page-lead">Escolha quanto espaço você precisa para pesquisar, comparar e construir uma linha de raciocínio.</p>
+          </div>
+          <button class="icon-button subtle hidden" id="manageBillingButton" type="button">Gerenciar na Stripe</button>
+        </header>
+
+        <section class="panel usage-card">
+          <div>
+            <span class="plan-kicker" id="currentPlanKicker">Seu plano</span>
+            <h2 id="currentPlanName">Grátis</h2>
+            <p id="currentPlanCycle">Renova em breve</p>
+          </div>
+          <div class="usage-meter-copy">
+            <div><strong id="tokensRemaining">100 mil</strong><span>tokens restantes</span></div>
+            <div><strong id="conversationAllowance">1 conversa</strong><span>por ciclo mensal</span></div>
+          </div>
+          <div class="usage-progress-wrap">
+            <div class="usage-progress"><span id="usageProgress"></span></div>
+            <small id="usageProgressLabel">0 de 100 mil tokens usados</small>
+          </div>
+        </section>
+
+        <div class="billing-notice" id="billingNotice" role="status"></div>
+
+        <section class="pricing-grid" aria-label="Planos Justra">
+          <article class="price-card" id="freePlanCard">
+            <div class="price-card-head">
+              <span class="plan-dot free"></span>
+              <div><span class="plan-kicker">Para experimentar</span><h2>Grátis</h2></div>
+            </div>
+            <p class="price"><strong>R$ 0</strong><span>para sempre</span></p>
+            <p>Uma conversa jurídica com contexto suficiente para explorar um tema do começo ao fim.</p>
+            <ul>
+              <li>100 mil tokens por mês</li>
+              <li>1 conversa por ciclo</li>
+              <li>Jurimetria e acervo jurídico</li>
+              <li>Radar de 1 termo com prévia de 3 linhas</li>
+              <li>Fontes e auditoria da resposta</li>
+            </ul>
+            <button class="plan-button secondary" id="freePlanButton" type="button" disabled>Plano atual</button>
+          </article>
+
+          <article class="price-card featured" id="premiumPlanCard">
+            <div class="recommended">30× mais pesquisa</div>
+            <div class="price-card-head">
+              <span class="plan-dot premium"></span>
+              <div><span class="plan-kicker">Para trabalho contínuo</span><h2>Premium</h2></div>
+            </div>
+            <p class="price"><strong id="premiumPrice">R$ 99,00</strong><span>por mês</span></p>
+            <p>Mais espaço para vários casos, novos temas e investigações que pedem continuidade.</p>
+            <ul>
+              <li>3 milhões de tokens por mês</li>
+              <li>Conversas ilimitadas</li>
+              <li>Radar completo para até 5 termos</li>
+              <li>Todo o acervo e recursos do Grátis</li>
+              <li>Gestão de cobrança pela Stripe</li>
+            </ul>
+            <button class="plan-button primary" id="upgradeButton" type="button">Assinar Premium</button>
+            <small class="stripe-note">Checkout seguro hospedado pela Stripe. Cancele quando quiser.</small>
+          </article>
+        </section>
+
+        <section class="billing-footnote">
+          <p><strong>Como contamos?</strong> Entradas, respostas e contexto enviado ao modelo entram no consumo. No modo local sem API, a Justra usa uma estimativa conservadora.</p>
+          <p><strong>O que acontece no limite?</strong> Seu histórico continua disponível; novas respostas voltam a funcionar na renovação do ciclo ou após o upgrade.</p>
+        </section>
+      </section>
+
+      <section class="view" id="view-radar">
+        <header class="page-head">
+          <div>
+            <p class="eyebrow">Inteligência contínua</p>
+            <h1>Radar de teses e precedentes</h1>
+          </div>
+          <button class="icon-button" id="refreshRadar" type="button">Atualizar</button>
+        </header>
+
+        <section class="radar-hero panel">
+          <div>
+            <span class="badge" id="radarPlanBadge">Carregando plano</span>
+            <h2>Monitore uma tese enquanto a jurisprudência evolui.</h2>
+            <p>Adicione expressões objetivas. A Justra procura novos julgados, súmulas, OJs e precedentes relacionados.</p>
+          </div>
+          <form id="radarForm" class="radar-form">
+            <label>
+              <span>Nova tese ou termo</span>
+              <input id="radarTerm" maxlength="120" placeholder="Ex.: horas extras cargo de confiança" required>
+            </label>
+            <button type="submit">Monitorar</button>
+            <small id="radarLimitText" class="muted"></small>
+          </form>
+        </section>
+
+        <section class="panel">
+          <div class="section-head">
+            <h2>Termos monitorados</h2>
+            <span id="radarMonitorMeta" class="muted">Nenhum termo</span>
+          </div>
+          <div id="radarMonitors" class="radar-monitors"></div>
+        </section>
+
+        <section class="panel">
+          <div class="section-head">
+            <h2>Movimentações encontradas</h2>
+            <span id="radarGeneratedAt" class="muted"></span>
+          </div>
+          <div id="radarEvents" class="radar-events"></div>
+        </section>
+      </section>
+
+      <section class="view" id="view-bot">
+        <header class="page-head">
+          <div>
+            <p class="eyebrow">Admin</p>
+            <h1>Saúde do bot</h1>
+          </div>
+          <button class="icon-button" id="refreshBotHealth" title="Atualizar">Atualizar</button>
+        </header>
+        <section class="metric-grid" id="botHealthCards"></section>
+        <section class="split">
+          <div class="panel">
+            <div class="section-head">
+              <h2>Graders</h2>
+            </div>
+            <div id="graderTotals" class="grader-list"></div>
+          </div>
+          <div class="panel">
+            <div class="section-head">
+              <h2>Guardrails</h2>
+            </div>
+            <div id="guardrailList" class="rule-list"></div>
+          </div>
+        </section>
+        <section class="panel">
+          <div class="section-head">
+            <h2>Configuração editável</h2>
+            <button id="saveBotControls">Salvar</button>
+          </div>
+          <textarea id="botControlsEditor" class="json-editor" spellcheck="false"></textarea>
+          <div id="saveStatus" class="save-status"></div>
+        </section>
+        <section class="panel">
+          <div class="section-head">
+            <h2>Últimas respostas auditadas</h2>
+          </div>
+          <div class="table-wrap">
+            <table>
+              <thead><tr><th>Hora</th><th>Pergunta</th><th>Rota</th><th>Modelo</th><th>Memória</th><th>Checks</th></tr></thead>
+              <tbody id="auditTable"></tbody>
+            </table>
+          </div>
+        </section>
+      </section>
+
+      <section class="view" id="view-mapa">
+        <header class="page-head">
+          <div>
+            <p class="eyebrow">Admin</p>
+            <h1>Mapa de cobertura</h1>
+          </div>
+          <button class="icon-button" id="refreshCoverage" title="Atualizar">Atualizar</button>
+        </header>
+        <section class="metric-grid" id="coverageCards"></section>
+        <section class="panel">
+          <div class="section-head">
+            <h2>Camadas de informação</h2>
+          </div>
+          <div class="table-wrap">
+            <table>
+              <thead><tr><th>Fonte</th><th>Camada</th><th>Status</th><th>Itens</th><th>Banco / tabela</th><th>Qualidade</th><th>Próximo passo</th></tr></thead>
+              <tbody id="sourceLayerTable"></tbody>
+            </table>
+          </div>
+        </section>
+        <section class="panel">
+          <div class="section-head dictionary-head">
+            <div>
+              <h2>Dicionário das tabelas</h2>
+              <p class="muted">O que cada tabela representa, como se relaciona e como conferir o estado dos dados.</p>
+            </div>
+          </div>
+          <div id="tableDictionary" class="table-dictionary"></div>
+        </section>
+        <section class="panel">
+          <div class="section-head">
+            <h2>TRTs e TST</h2>
+          </div>
+          <div class="table-wrap">
+            <table>
+              <thead><tr><th>Tribunal</th><th>Metadados</th><th>Jurisprudência</th><th>Doutrina</th><th>Inteiro teor</th><th>Itens</th></tr></thead>
+              <tbody id="courtMapTable"></tbody>
+            </table>
+          </div>
+        </section>
+        <section class="panel">
+          <div class="section-head">
+            <h2>Lacunas abertas</h2>
+          </div>
+          <div id="openGaps" class="gap-list"></div>
+        </section>
+      </section>
+
+      <section class="view" id="view-sql">
+        <header class="page-head">
+          <div>
+            <p class="eyebrow">Admin</p>
+            <h1>DuckDB SQL</h1>
+          </div>
+          <div class="page-actions">
+            <button class="icon-button subtle" id="refreshDuckdb" type="button" title="Atualizar catálogo">Atualizar catálogo</button>
+            <button class="icon-button" id="runDuckdbQuery" type="button" title="Executar query">Executar</button>
+          </div>
+        </header>
+
+        <section class="metric-grid" id="duckdbConnectionCards"></section>
+
+        <section class="split sql-workbench">
+          <div class="panel sql-editor-panel">
+            <div class="section-head">
+              <h2>Consulta</h2>
+              <label class="inline-select">
+                <span>Base</span>
+                <select id="duckdbDatabase"></select>
+              </label>
+            </div>
+            <div class="sample-query-list" id="duckdbExamples"></div>
+            <textarea id="duckdbSql" class="sql-editor" spellcheck="false"></textarea>
+            <div class="sql-actions">
+              <button id="runDuckdbQueryBottom" type="button">Executar query</button>
+              <span id="duckdbStatus" class="muted">Somente leitura. Limite automático de 500 linhas.</span>
+            </div>
+          </div>
+
+          <aside class="panel sql-schema-panel">
+            <div class="section-head">
+              <h2>Catálogo</h2>
+            </div>
+            <div id="duckdbSchema" class="schema-list"></div>
+          </aside>
+        </section>
+
+        <section class="panel">
+          <div class="section-head">
+            <h2>Resultado</h2>
+            <span id="duckdbResultMeta" class="muted">Nenhuma query executada.</span>
+          </div>
+          <div class="table-wrap sql-result-wrap">
+            <table id="duckdbResultTable">
+              <thead></thead>
+              <tbody><tr><td class="muted">Execute uma query para ver os dados.</td></tr></tbody>
+            </table>
+          </div>
+        </section>
+      </section>
+
+      <section class="view" id="view-coleta">
+        <header class="page-head">
+          <div>
+            <p class="eyebrow">Admin · ingestão</p>
+            <h1>Monitor da coleta Falcão</h1>
+          </div>
+          <div class="page-actions">
+            <button class="icon-button subtle" id="refreshCollector" type="button">Atualizar</button>
+            <button class="icon-button" id="runCollectorNow" type="button">Executar D-1 agora</button>
+          </div>
+        </header>
+
+        <div class="collector-tabs" role="tablist" aria-label="Modos de coleta">
+          <button class="collector-tab active" id="collectorTabD1" type="button" role="tab" aria-selected="true">D-1</button>
+          <button class="collector-tab" id="collectorTabWindows" type="button" role="tab" aria-selected="false">Janelas</button>
+        </div>
+
+        <section class="collector-control panel">
+          <div>
+            <span class="collector-light" id="collectorLight"></span>
+            <div><span class="plan-kicker">Estado atual</span><h2 id="collectorState">Carregando</h2></div>
+          </div>
+          <div class="collector-actions">
+            <button id="enableCollector" type="button">Ligar / retomar</button>
+            <button id="pauseCollector" class="danger-button" type="button">Pausar</button>
+          </div>
+          <p id="collectorControlNote" class="muted"></p>
+        </section>
+
+        <section class="panel collector-frequency">
+          <div class="section-head">
+            <div><h2>Frequência das requisições</h2><span class="muted">Amostragem uniforme entre os limites, antes de cada chamada.</span></div>
+            <button id="saveCollectorPolicy" type="button">Salvar frequência</button>
+          </div>
+          <div class="collector-frequency-fields">
+            <label><span>Limite inferior</span><div><input id="collectorMinDelay" type="number" min="1" max="3600" step="1"><small>segundos</small></div></label>
+            <label><span>Limite superior</span><div><input id="collectorMaxDelay" type="number" min="1" max="3600" step="1"><small>segundos</small></div></label>
+          </div>
+          <p id="collectorPolicyNote" class="muted"></p>
+        </section>
+
+        <div id="collectorPaneD1">
+          <section class="metric-grid" id="collectorCards"></section>
+
+          <section class="split collector-split">
+            <div class="panel">
+              <div class="section-head"><h2>Política ativa</h2></div>
+              <div id="collectorPolicy" class="definition-list"></div>
+            </div>
+            <div class="panel">
+              <div class="section-head"><h2>Progresso atual</h2></div>
+              <div id="collectorProgress" class="definition-list"></div>
+            </div>
+          </section>
+
+          <section class="panel">
+            <div class="section-head"><h2>Respostas HTTP</h2><span id="collectorHttpMeta" class="muted"></span></div>
+            <div id="collectorHttpStatuses" class="status-strip"></div>
+          </section>
+
+          <section class="panel">
+            <div class="section-head">
+              <h2>Requisições recentes</h2>
+              <span id="collectorRequestMeta" class="muted"></span>
+            </div>
+            <div class="table-wrap">
+              <table>
+                <thead><tr><th>Hora</th><th>Evento</th><th>HTTP</th><th>Data</th><th>Coleção</th><th>Filtros/página</th><th>Latência</th><th>Bytes</th></tr></thead>
+                <tbody id="collectorRequestTable"></tbody>
+              </table>
+            </div>
+          </section>
+        </div>
+
+        <div id="collectorPaneWindows" class="hidden">
+          <section class="panel backfill-controls">
+            <div class="section-head">
+              <div><h2>Plano de backfill · 3 meses</h2><span id="backfillPlanMeta" class="muted"></span></div>
+              <button id="runBackfillRange" type="button">Executar intervalo</button>
+            </div>
+            <div class="backfill-range-fields">
+              <label><span>Início</span><input id="backfillStartDate" type="date"></label>
+              <label><span>Fim</span><input id="backfillEndDate" type="date"></label>
+            </div>
+            <p id="backfillRunNote" class="muted">Cada dia é uma janela; janelas completas são retomáveis e não são baixadas novamente.</p>
+          </section>
+
+          <section class="metric-grid" id="backfillCards"></section>
+
+          <section class="panel">
+            <div class="section-head"><h2>Janelas diárias</h2><span class="muted">Todos os tribunais, TRTs e cortes superiores presentes no Falcão</span></div>
+            <div class="table-wrap backfill-window-table">
+              <table>
+                <thead><tr><th>Data</th><th>Status</th><th>Coleções</th><th>Documentos</th><th>Faltam</th><th>Ação</th></tr></thead>
+                <tbody id="backfillWindowRows"></tbody>
+              </table>
+            </div>
+          </section>
+        </div>
+      </section>
+
+      <section class="view" id="view-djen">
+        <header class="page-head">
+          <div>
+            <p class="eyebrow">Admin · ingestão</p>
+            <h1>Coleta DJEN / Diário trabalhista</h1>
+          </div>
+          <div class="page-actions">
+            <button class="icon-button subtle" id="refreshDjen" type="button">Atualizar</button>
+            <button class="icon-button subtle" id="runDjenDryRun" type="button">Dry-run</button>
+            <button class="icon-button subtle" id="retryDjenPending" type="button">Retomar pendências</button>
+            <button class="icon-button" id="runDjenNow" type="button">Executar agora</button>
+          </div>
+        </header>
+
+        <section class="collector-control panel">
+          <div>
+            <span class="collector-light" id="djenLight"></span>
+            <div><span class="plan-kicker">Estado atual</span><h2 id="djenState">Carregando</h2></div>
+          </div>
+          <div class="collector-actions">
+            <button id="enableDjen" type="button">Ligar / retomar</button>
+            <button id="pauseDjen" class="danger-button" type="button">Pausar</button>
+          </div>
+          <p id="djenControlNote" class="muted"></p>
+        </section>
+
+        <section class="metric-grid" id="djenCards"></section>
+
+        <section class="split collector-split">
+          <div class="panel">
+            <div class="section-head"><h2>Política ativa</h2></div>
+            <div id="djenPolicy" class="definition-list"></div>
+          </div>
+          <div class="panel">
+            <div class="section-head"><h2>Última execução</h2></div>
+            <div id="djenProgress" class="definition-list"></div>
+          </div>
+        </section>
+
+        <section class="panel">
+          <div class="section-head"><h2>Respostas HTTP</h2><span id="djenHttpMeta" class="muted"></span></div>
+          <div id="djenHttpStatuses" class="status-strip"></div>
+        </section>
+
+        <section class="panel">
+          <div class="section-head">
+            <h2>Cadernos do dia</h2>
+            <span id="djenCadernoMeta" class="muted"></span>
+          </div>
+          <div class="table-wrap">
+            <table>
+              <thead><tr><th>Tribunal</th><th>Meio</th><th>Data</th><th>Status</th><th>Publicações</th><th>Páginas</th><th>Normalizadas</th></tr></thead>
+              <tbody id="djenCadernoRows"></tbody>
+            </table>
+          </div>
+        </section>
+
+        <section class="panel">
+          <div class="section-head">
+            <h2>Pendências</h2>
+            <span id="djenPendingMeta" class="muted"></span>
+          </div>
+          <div class="table-wrap">
+            <table>
+              <thead><tr><th>Tribunal</th><th>Meio</th><th>Data</th><th>Motivo</th></tr></thead>
+              <tbody id="djenPendingRows"></tbody>
+            </table>
+          </div>
+        </section>
+
+        <section class="panel">
+          <div class="section-head">
+            <h2>Requisições recentes</h2>
+            <span id="djenRequestMeta" class="muted"></span>
+          </div>
+          <div class="table-wrap">
+            <table>
+              <thead><tr><th>Hora</th><th>Etapa</th><th>HTTP</th><th>Tribunal</th><th>Meio</th><th>Latência</th><th>Bytes</th></tr></thead>
+              <tbody id="djenRequestRows"></tbody>
+            </table>
+          </div>
+        </section>
+      </section>
+    </main>
+  </div>
+  <script src="/assets/app.js?v=process-center-20260702b"></script>
+</body>
+</html>

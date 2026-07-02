@@ -1,0 +1,41 @@
+# Python
+.venv/
+__pycache__/
+*.py[cod]
+*.pyo
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Local environment and secrets
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.p12
+*.pfx
+
+# OS and editor files
+.DS_Store
+.idea/
+.vscode/
+*.swp
+
+# Runtime data and generated artifacts
+data/
+logs/
+reports/*.html
+reports/*.pdf
+dist/
+*.duckdb
+*.duckdb.*
+*.sqlite
+*.sqlite3
+*.db
+*.log
+*.tmp
+
+# JavaScript tooling
+node_modules/
+coverage/

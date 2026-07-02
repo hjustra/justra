@@ -1,0 +1,43 @@
+on_http_request:
+  - name: Limite global por endereço IP
+    actions:
+      - type: rate-limit
+        config:
+          name: 300 requisições por minuto por IP
+          algorithm: sliding_window
+          capacity: 300
+          rate: 60s
+          bucket_key:
+            - conn.client_ip
+  - name: Proteção contra força bruta na autenticação
+    expressions:
+      - "req.url.contains('/api/auth/login') || req.url.contains('/api/auth/register') || req.url.contains('/api/auth/google/complete')"
+    actions:
+      - type: rate-limit
+        config:
+          name: 10 tentativas de autenticação por minuto por IP
+          algorithm: sliding_window
+          capacity: 10
+          rate: 60s
+          bucket_key:
+            - conn.client_ip
+      - type: rate-limit
+        config:
+          name: 30 tentativas de autenticação por hora por IP
+          algorithm: sliding_window
+          capacity: 30
+          rate: 1h
+          bucket_key:
+            - conn.client_ip
+  - name: Proteção de custo do chat
+    expressions:
+      - "req.url.contains('/api/chat')"
+    actions:
+      - type: rate-limit
+        config:
+          name: 30 chamadas de chat por minuto por IP
+          algorithm: sliding_window
+          capacity: 30
+          rate: 60s
+          bucket_key:
+            - conn.client_ip

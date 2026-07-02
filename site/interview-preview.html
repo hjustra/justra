@@ -1,0 +1,69 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Transcrição da entrevista · Justra</title>
+  <link rel="stylesheet" href="/assets/document-preview.css?v=brand-20260702a">
+</head>
+<body>
+  <div class="preview-app">
+    <header class="preview-header">
+      <div class="preview-title-area">
+        <a class="brand-pill" href="/processos" title="Voltar para a Justra">
+          <img src="/assets/justra-icon-128.png?v=20260702" alt="" aria-hidden="true">
+          <strong>Justra</strong>
+        </a>
+        <p class="eyebrow">Entrevista gravada</p>
+        <h1 id="previewTitle">Abrindo transcrição...</h1>
+        <p id="previewSubtitle" class="preview-subtitle">Carregando a transcrição completa salva no dossiê.</p>
+        <div id="previewBadges" class="preview-badges" aria-live="polite">
+          <span class="badge muted">Preparando preview</span>
+        </div>
+      </div>
+      <div class="preview-actions" aria-label="Ações da entrevista">
+        <button id="closePreview" type="button" class="btn secondary">Fechar</button>
+        <button id="listenAudio" type="button" class="btn secondary" disabled>Ouvir áudio</button>
+        <button id="downloadTranscript" type="button" class="btn secondary" disabled>Baixar transcrição</button>
+        <button id="downloadAudio" type="button" class="btn primary" disabled>Baixar áudio original</button>
+      </div>
+    </header>
+
+    <main class="preview-main">
+      <aside class="preview-sidebar" aria-label="Resumo da entrevista">
+        <section class="sidebar-card">
+          <p class="card-label">Status</p>
+          <strong id="versionStatus">Carregando</strong>
+          <span id="versionHint">Vamos mostrar a transcrição assim que a API responder.</span>
+        </section>
+        <section class="sidebar-card">
+          <p class="card-label">Áudio original</p>
+          <strong id="documentKind">Áudio</strong>
+          <span id="documentSize">Tamanho indisponível</span>
+        </section>
+        <section class="sidebar-card calm">
+          <p class="card-label">Atenção</p>
+          <span>Transcrições automáticas podem conter erros. Confira nomes, datas, valores e termos técnicos antes de usar em peça.</span>
+        </section>
+      </aside>
+
+      <section class="document-stage" aria-label="Transcrição da entrevista">
+        <div id="previewNotice" class="notice info" role="status">Preparando uma visualização limpa da transcrição.</div>
+        <div id="audioPreviewBox" class="preview-audio-box hidden">
+          <div><strong>Áudio original</strong><span>Ouça a gravação preservada no dossiê.</span></div>
+          <audio id="audioPreview" controls preload="metadata"></audio>
+        </div>
+        <article class="paper" aria-live="polite">
+          <div id="documentContent" class="loading-state">
+            <span class="spinner" aria-hidden="true"></span>
+            <strong>Abrindo transcrição...</strong>
+            <small>Se demorar mais que alguns segundos, a página vai mostrar o erro em vez de travar.</small>
+          </div>
+        </article>
+      </section>
+    </main>
+  </div>
+
+  <script src="/assets/interview-preview.js?v=audio-url-playback-20260625a"></script>
+</body>
+</html>

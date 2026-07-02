@@ -1,0 +1,58 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.justra.falcao-safe</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>/Users/heitordoamaraljurkovich/Desktop/justra/pesquisa/.venv/bin/python</string>
+    <string>-u</string>
+    <string>/Users/heitordoamaraljurkovich/Desktop/justra/pesquisa/scripts/run_falcao_safe.py</string>
+    <string>--node</string>
+    <string>/Users/heitordoamaraljurkovich/.cache/codex-runtimes/codex-primary-runtime/dependencies/node/bin/node</string>
+    <string>--script</string>
+    <string>/Users/heitordoamaraljurkovich/Desktop/justra/pesquisa/scripts/collect_falcao_week.mjs</string>
+    <string>--output-tag</string>
+    <string>2026-06-11_2026-06-18</string>
+    <string>--minimum-block-free-minutes</string>
+    <string>1440</string>
+    <string>--</string>
+    <string>--start-date</string>
+    <string>2026-06-11</string>
+    <string>--end-date</string>
+    <string>2026-06-18</string>
+    <string>--page-size</string>
+    <string>20</string>
+    <string>--sleep-ms</string>
+    <string>120000</string>
+    <string>--jitter-ms</string>
+    <string>20000</string>
+    <string>--request-budget</string>
+    <string>550</string>
+    <string>--rest-every</string>
+    <string>0</string>
+    <string>--rest-ms</string>
+    <string>0</string>
+    <string>--block-cooldown-minutes</string>
+    <string>2880</string>
+    <string>--headless</string>
+  </array>
+  <key>WorkingDirectory</key>
+  <string>/Users/heitordoamaraljurkovich/Desktop/justra/pesquisa</string>
+  <!-- Disabled: scheduling now runs inside com.justra.app so macOS does not
+       require broader access to the protected Desktop directory. -->
+  <key>Disabled</key>
+  <true/>
+  <key>ProcessType</key>
+  <string>Background</string>
+  <key>Nice</key>
+  <integer>10</integer>
+  <key>ThrottleInterval</key>
+  <integer>300</integer>
+  <key>StandardOutPath</key>
+  <string>/Users/heitordoamaraljurkovich/Desktop/justra/pesquisa/logs/falcao-safe-scheduler.log</string>
+  <key>StandardErrorPath</key>
+  <string>/Users/heitordoamaraljurkovich/Desktop/justra/pesquisa/logs/falcao-safe-scheduler-error.log</string>
+</dict>
+</plist>

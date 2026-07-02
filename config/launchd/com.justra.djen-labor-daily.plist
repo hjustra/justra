@@ -1,0 +1,31 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.justra.djen-labor-daily</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>/Users/heitordoamaraljurkovich/Desktop/justra/pesquisa/.venv/bin/python</string>
+    <string>-u</string>
+    <string>/Users/heitordoamaraljurkovich/Desktop/justra/pesquisa/scripts/run_djen_daily.py</string>
+  </array>
+  <key>WorkingDirectory</key>
+  <string>/Users/heitordoamaraljurkovich/Desktop/justra/pesquisa</string>
+  <key>StartCalendarInterval</key>
+  <dict>
+    <key>Hour</key>
+    <integer>12</integer>
+    <key>Minute</key>
+    <integer>0</integer>
+  </dict>
+  <key>ProcessType</key>
+  <string>Background</string>
+  <key>Nice</key>
+  <integer>10</integer>
+  <key>StandardOutPath</key>
+  <string>/Users/heitordoamaraljurkovich/Desktop/justra/pesquisa/logs/djen-launchd.log</string>
+  <key>StandardErrorPath</key>
+  <string>/Users/heitordoamaraljurkovich/Desktop/justra/pesquisa/logs/djen-launchd-error.log</string>
+</dict>
+</plist>

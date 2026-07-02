@@ -1,0 +1,1876 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Justra v0 - TRT2 Local</title>
+  <style>
+    :root {
+      --ink: #202a28;
+      --muted: #66736f;
+      --line: #d7dedb;
+      --surface: #ffffff;
+      --page: #f5f7f6;
+      --nav: #253431;
+      --nav-soft: #314540;
+      --teal: #0b6b5a;
+      --teal-soft: #d9eee9;
+      --red: #a64235;
+      --red-soft: #f2dfdc;
+      --amber: #8a620f;
+      --amber-soft: #f3e8c8;
+      --olive: #566b2e;
+      --olive-soft: #e5edd8;
+      --plum: #76506f;
+      --plum-soft: #eaddea;
+      --shadow: 0 10px 24px rgba(32, 42, 40, .08);
+    }
+
+    * { box-sizing: border-box; }
+
+    body {
+      margin: 0;
+      min-height: 100vh;
+      color: var(--ink);
+      background: var(--page);
+      font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      letter-spacing: 0;
+    }
+
+    button, input, select {
+      font: inherit;
+      letter-spacing: 0;
+    }
+
+    button {
+      cursor: pointer;
+    }
+
+    .auth-screen {
+      display: grid;
+      min-height: 100vh;
+      grid-template-columns: minmax(320px, .92fr) minmax(360px, 1.08fr);
+      background: var(--page);
+    }
+
+    .auth-panel {
+      display: flex;
+      flex-direction: column;
+      justify-content: space-between;
+      gap: 28px;
+      padding: 34px;
+      color: #f4faf8;
+      background: var(--nav);
+    }
+
+    .auth-brand {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+    }
+
+    .auth-brand strong {
+      display: block;
+      font-size: 22px;
+      line-height: 1.1;
+    }
+
+    .auth-brand span,
+    .auth-copy p,
+    .auth-note {
+      color: #bed0cb;
+    }
+
+    .auth-copy {
+      max-width: 520px;
+    }
+
+    .auth-copy h1 {
+      margin: 0;
+      font-size: 34px;
+      line-height: 1.08;
+    }
+
+    .auth-copy p {
+      margin: 14px 0 0;
+      line-height: 1.55;
+    }
+
+    .auth-stats {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 10px;
+      max-width: 520px;
+    }
+
+    .auth-stat {
+      min-height: 76px;
+      padding: 12px;
+      border: 1px solid rgba(255, 255, 255, .16);
+      border-radius: 8px;
+      background: rgba(255, 255, 255, .06);
+    }
+
+    .auth-stat strong {
+      display: block;
+      font-size: 22px;
+    }
+
+    .auth-stat span {
+      display: block;
+      margin-top: 4px;
+      color: #bed0cb;
+      font-size: 12px;
+    }
+
+    .auth-form-wrap {
+      display: grid;
+      align-content: center;
+      padding: 34px;
+    }
+
+    .auth-card {
+      width: min(100%, 460px);
+      margin: 0 auto;
+      padding: 24px;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: var(--surface);
+      box-shadow: var(--shadow);
+    }
+
+    .auth-card h2 {
+      margin: 0;
+      font-size: 22px;
+      line-height: 1.2;
+    }
+
+    .auth-card p {
+      margin: 8px 0 18px;
+      color: var(--muted);
+      font-size: 13px;
+      line-height: 1.45;
+    }
+
+    .auth-tabs {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 4px;
+      padding: 4px;
+      margin-bottom: 16px;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: #f0f3f2;
+    }
+
+    .auth-tabs button {
+      min-height: 34px;
+      border: 0;
+      border-radius: 6px;
+      color: var(--muted);
+      background: transparent;
+      font-weight: 700;
+    }
+
+    .auth-tabs button.active {
+      color: var(--ink);
+      background: var(--surface);
+      box-shadow: 0 1px 4px rgba(32, 42, 40, .12);
+    }
+
+    .auth-form {
+      display: grid;
+      gap: 12px;
+    }
+
+    .auth-form.hidden,
+    .auth-screen.hidden,
+    .shell.hidden {
+      display: none;
+    }
+
+    .auth-divider {
+      display: grid;
+      grid-template-columns: 1fr auto 1fr;
+      align-items: center;
+      gap: 10px;
+      margin: 16px 0;
+      color: var(--muted);
+      font-size: 12px;
+    }
+
+    .auth-divider::before,
+    .auth-divider::after {
+      content: "";
+      height: 1px;
+      background: var(--line);
+    }
+
+    .google-btn {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 10px;
+      width: 100%;
+      min-height: 40px;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      color: var(--ink);
+      background: var(--surface);
+      font-weight: 700;
+    }
+
+    .google-dot {
+      display: inline-grid;
+      width: 20px;
+      height: 20px;
+      place-items: center;
+      border-radius: 50%;
+      color: #fff;
+      background: #4285f4;
+      font-size: 13px;
+      font-weight: 800;
+    }
+
+    .auth-message {
+      min-height: 20px;
+      color: var(--red);
+      font-size: 12px;
+      font-weight: 700;
+    }
+
+    .auth-message.ok {
+      color: var(--teal);
+    }
+
+    .auth-note {
+      max-width: 520px;
+      font-size: 12px;
+      line-height: 1.45;
+    }
+
+    .shell {
+      display: grid;
+      min-height: 100vh;
+      grid-template-columns: 232px minmax(0, 1fr) 360px;
+    }
+
+    .sidebar {
+      display: flex;
+      flex-direction: column;
+      gap: 24px;
+      padding: 22px 16px;
+      color: #f4faf8;
+      background: var(--nav);
+    }
+
+    .brand {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      min-width: 0;
+      padding: 0 4px 12px;
+      border-bottom: 1px solid rgba(255, 255, 255, .16);
+    }
+
+    .brand-mark {
+      display: grid;
+      flex: 0 0 38px;
+      width: 38px;
+      height: 38px;
+      place-items: center;
+      color: #fff;
+      background: var(--teal);
+      border-radius: 8px;
+    }
+
+    .brand-text strong {
+      display: block;
+      font-size: 17px;
+      line-height: 1.1;
+    }
+
+    .brand-text span {
+      display: block;
+      margin-top: 3px;
+      color: #bed0cb;
+      font-size: 12px;
+    }
+
+    .nav {
+      display: grid;
+      gap: 6px;
+    }
+
+    .nav button {
+      display: flex;
+      align-items: center;
+      width: 100%;
+      min-height: 38px;
+      gap: 10px;
+      border: 0;
+      border-radius: 8px;
+      color: #e5f0ed;
+      background: transparent;
+      text-align: left;
+      padding: 9px 10px;
+    }
+
+    .nav button:hover,
+    .nav button.active {
+      background: var(--nav-soft);
+    }
+
+    .sidebar-foot {
+      margin-top: auto;
+      padding: 12px;
+      border: 1px solid rgba(255, 255, 255, .16);
+      border-radius: 8px;
+      color: #d4e2de;
+      font-size: 12px;
+      line-height: 1.45;
+    }
+
+    .main {
+      min-width: 0;
+      padding: 22px;
+    }
+
+    .topbar {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 16px;
+      margin-bottom: 18px;
+    }
+
+    .title h1 {
+      margin: 0;
+      font-size: 24px;
+      line-height: 1.15;
+      font-weight: 760;
+    }
+
+    .title p {
+      margin: 5px 0 0;
+      color: var(--muted);
+      font-size: 13px;
+    }
+
+    .actions {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+
+    .icon-btn,
+    .command-btn {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      min-height: 36px;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      color: var(--ink);
+      background: var(--surface);
+    }
+
+    .icon-btn {
+      width: 36px;
+      padding: 0;
+    }
+
+    .command-btn {
+      gap: 8px;
+      padding: 0 12px;
+      color: #fff;
+      border-color: var(--teal);
+      background: var(--teal);
+    }
+
+    .user-chip {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      min-height: 36px;
+      max-width: 220px;
+      padding: 0 10px;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: var(--surface);
+      color: var(--ink);
+      font-size: 13px;
+      font-weight: 700;
+    }
+
+    .user-chip span {
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .avatar {
+      display: inline-grid;
+      width: 24px;
+      height: 24px;
+      place-items: center;
+      border-radius: 50%;
+      color: #fff;
+      background: var(--teal);
+      font-size: 12px;
+      font-weight: 800;
+    }
+
+    .filters {
+      display: grid;
+      grid-template-columns: 1.5fr repeat(3, minmax(140px, .7fr));
+      gap: 10px;
+      margin-bottom: 16px;
+    }
+
+    .field {
+      display: grid;
+      gap: 6px;
+    }
+
+    .field label {
+      color: var(--muted);
+      font-size: 12px;
+      font-weight: 680;
+    }
+
+    .field input,
+    .field select {
+      width: 100%;
+      min-height: 38px;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      color: var(--ink);
+      background: var(--surface);
+      padding: 8px 10px;
+      outline: none;
+    }
+
+    .field input:focus,
+    .field select:focus {
+      border-color: var(--teal);
+      box-shadow: 0 0 0 3px rgba(11, 107, 90, .12);
+    }
+
+    .metrics {
+      display: grid;
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      gap: 12px;
+      margin-bottom: 16px;
+    }
+
+    .metric {
+      min-width: 0;
+      min-height: 104px;
+      padding: 15px;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: var(--surface);
+      box-shadow: var(--shadow);
+    }
+
+    .metric span {
+      display: block;
+      color: var(--muted);
+      font-size: 12px;
+      font-weight: 680;
+    }
+
+    .metric strong {
+      display: block;
+      margin-top: 9px;
+      font-size: 28px;
+      line-height: 1;
+    }
+
+    .metric small {
+      display: block;
+      margin-top: 8px;
+      color: var(--muted);
+      font-size: 12px;
+    }
+
+    .grid {
+      display: grid;
+      grid-template-columns: minmax(0, 1.15fr) minmax(360px, .85fr);
+      gap: 12px;
+      align-items: start;
+    }
+
+    .panel {
+      min-width: 0;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: var(--surface);
+      box-shadow: var(--shadow);
+      overflow: hidden;
+    }
+
+    .panel-head {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      min-height: 52px;
+      padding: 14px 16px;
+      border-bottom: 1px solid var(--line);
+    }
+
+    .panel-head h2 {
+      margin: 0;
+      font-size: 15px;
+      line-height: 1.2;
+    }
+
+    .panel-body {
+      padding: 14px 16px 16px;
+    }
+
+    .segmented {
+      display: inline-flex;
+      gap: 2px;
+      padding: 3px;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: #f0f3f2;
+    }
+
+    .segmented button {
+      min-height: 30px;
+      border: 0;
+      border-radius: 6px;
+      color: var(--muted);
+      background: transparent;
+      padding: 0 10px;
+      font-size: 12px;
+      font-weight: 680;
+    }
+
+    .segmented button.active {
+      color: var(--ink);
+      background: var(--surface);
+      box-shadow: 0 1px 4px rgba(32, 42, 40, .12);
+    }
+
+    .bar-list {
+      display: grid;
+      gap: 12px;
+    }
+
+    .bar-row {
+      display: grid;
+      grid-template-columns: minmax(120px, .7fr) minmax(180px, 1fr) 48px;
+      align-items: center;
+      gap: 10px;
+      min-height: 28px;
+    }
+
+    .bar-label {
+      min-width: 0;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      font-size: 13px;
+      font-weight: 680;
+    }
+
+    .bar-track {
+      height: 10px;
+      border-radius: 999px;
+      background: #e7ecea;
+      overflow: hidden;
+    }
+
+    .bar-fill {
+      height: 100%;
+      border-radius: inherit;
+      background: var(--teal);
+    }
+
+    .bar-value {
+      color: var(--muted);
+      font-size: 12px;
+      text-align: right;
+    }
+
+    .outcomes {
+      display: grid;
+      gap: 12px;
+    }
+
+    .outcome-row {
+      display: grid;
+      gap: 7px;
+    }
+
+    .outcome-title {
+      display: flex;
+      justify-content: space-between;
+      gap: 12px;
+      font-size: 13px;
+      font-weight: 700;
+    }
+
+    .stack {
+      display: flex;
+      height: 14px;
+      border-radius: 999px;
+      background: #e7ecea;
+      overflow: hidden;
+    }
+
+    .stack span {
+      height: 100%;
+      min-width: 3px;
+    }
+
+    .procedente { background: var(--olive); }
+    .parcial { background: var(--amber); }
+    .improcedente { background: var(--red); }
+    .na { background: #9aa5a1; }
+
+    .legend {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 10px;
+      margin-top: 12px;
+      color: var(--muted);
+      font-size: 12px;
+    }
+
+    .legend i {
+      display: inline-block;
+      width: 9px;
+      height: 9px;
+      border-radius: 3px;
+      margin-right: 5px;
+    }
+
+    .decision-list {
+      display: grid;
+      gap: 8px;
+    }
+
+    .decision-item {
+      display: grid;
+      grid-template-columns: 1fr auto;
+      gap: 8px;
+      width: 100%;
+      min-height: 74px;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: #fbfcfc;
+      padding: 11px;
+      text-align: left;
+    }
+
+    .decision-item.active {
+      border-color: var(--teal);
+      box-shadow: 0 0 0 3px rgba(11, 107, 90, .12);
+    }
+
+    .decision-main {
+      min-width: 0;
+    }
+
+    .decision-title {
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      font-size: 13px;
+      font-weight: 760;
+    }
+
+    .decision-meta {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 7px;
+      margin-top: 7px;
+      color: var(--muted);
+      font-size: 12px;
+    }
+
+    .tag {
+      display: inline-flex;
+      align-items: center;
+      min-height: 24px;
+      border-radius: 999px;
+      padding: 0 8px;
+      font-size: 12px;
+      font-weight: 700;
+      white-space: nowrap;
+    }
+
+    .tag.teal { color: var(--teal); background: var(--teal-soft); }
+    .tag.red { color: var(--red); background: var(--red-soft); }
+    .tag.amber { color: var(--amber); background: var(--amber-soft); }
+    .tag.olive { color: var(--olive); background: var(--olive-soft); }
+    .tag.plum { color: var(--plum); background: var(--plum-soft); }
+
+    .side {
+      min-width: 0;
+      padding: 22px 18px;
+      border-left: 1px solid var(--line);
+      background: #fbfcfc;
+    }
+
+    .detail {
+      position: sticky;
+      top: 18px;
+      display: grid;
+      gap: 12px;
+    }
+
+    .detail-header {
+      padding: 16px;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: var(--surface);
+      box-shadow: var(--shadow);
+    }
+
+    .detail-header h2 {
+      margin: 10px 0 6px;
+      font-size: 18px;
+      line-height: 1.25;
+    }
+
+    .detail-header p {
+      margin: 0;
+      color: var(--muted);
+      font-size: 13px;
+      line-height: 1.45;
+    }
+
+    .detail-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 8px;
+    }
+
+    .fact {
+      min-width: 0;
+      padding: 12px;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: var(--surface);
+    }
+
+    .fact span {
+      display: block;
+      color: var(--muted);
+      font-size: 11px;
+      font-weight: 720;
+    }
+
+    .fact strong {
+      display: block;
+      margin-top: 5px;
+      overflow-wrap: anywhere;
+      font-size: 13px;
+    }
+
+    .quote {
+      padding: 14px;
+      border-left: 4px solid var(--teal);
+      border-radius: 8px;
+      background: var(--teal-soft);
+      color: #173c36;
+      font-size: 13px;
+      line-height: 1.48;
+    }
+
+    .mini-table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 13px;
+    }
+
+    .mini-table th,
+    .mini-table td {
+      padding: 9px 6px;
+      border-bottom: 1px solid var(--line);
+      text-align: left;
+      vertical-align: top;
+    }
+
+    .mini-table th {
+      color: var(--muted);
+      font-size: 11px;
+      text-transform: uppercase;
+    }
+
+    .heatmap {
+      display: grid;
+      grid-template-columns: 140px repeat(4, minmax(54px, 1fr));
+      gap: 6px;
+      align-items: stretch;
+      overflow-x: auto;
+    }
+
+    .heat-cell,
+    .heat-label,
+    .heat-head {
+      min-height: 34px;
+      border-radius: 6px;
+      padding: 8px;
+      font-size: 12px;
+    }
+
+    .heat-head {
+      color: var(--muted);
+      font-weight: 760;
+      text-align: center;
+    }
+
+    .heat-label {
+      color: var(--ink);
+      background: #f0f3f2;
+      font-weight: 700;
+    }
+
+    .heat-cell {
+      color: var(--ink);
+      background: var(--teal-soft);
+      text-align: center;
+      font-weight: 760;
+    }
+
+    .empty {
+      padding: 24px;
+      color: var(--muted);
+      text-align: center;
+      border: 1px dashed var(--line);
+      border-radius: 8px;
+      background: #fbfcfc;
+    }
+
+    svg {
+      width: 18px;
+      height: 18px;
+      flex: 0 0 auto;
+      stroke: currentColor;
+      stroke-width: 2;
+      stroke-linecap: round;
+      stroke-linejoin: round;
+      fill: none;
+    }
+
+    @media (max-width: 1180px) {
+      .shell {
+        grid-template-columns: 84px minmax(0, 1fr);
+      }
+
+      .sidebar {
+        padding: 18px 10px;
+      }
+
+      .brand-text,
+      .nav span,
+      .sidebar-foot {
+        display: none;
+      }
+
+      .nav button {
+        justify-content: center;
+      }
+
+      .side {
+        grid-column: 2;
+        border-left: 0;
+        border-top: 1px solid var(--line);
+      }
+
+      .detail {
+        position: static;
+      }
+    }
+
+    @media (max-width: 860px) {
+      .auth-screen {
+        grid-template-columns: 1fr;
+      }
+
+      .auth-panel,
+      .auth-form-wrap {
+        padding: 20px;
+      }
+
+      .auth-copy h1 {
+        font-size: 28px;
+      }
+
+      .auth-stats {
+        grid-template-columns: 1fr;
+      }
+
+      .shell {
+        display: block;
+      }
+
+      .sidebar {
+        position: sticky;
+        top: 0;
+        z-index: 5;
+        flex-direction: row;
+        align-items: center;
+        gap: 12px;
+        overflow-x: auto;
+      }
+
+      .brand {
+        border-bottom: 0;
+        padding: 0;
+      }
+
+      .nav {
+        display: flex;
+        min-width: max-content;
+      }
+
+      .main,
+      .side {
+        padding: 16px;
+      }
+
+      .topbar,
+      .actions {
+        align-items: stretch;
+        flex-direction: column;
+      }
+
+      .actions {
+        flex-direction: row;
+      }
+
+      .filters,
+      .metrics,
+      .grid,
+      .detail-grid {
+        grid-template-columns: 1fr;
+      }
+
+      .bar-row {
+        grid-template-columns: 1fr;
+      }
+
+      .bar-value {
+        text-align: left;
+      }
+    }
+  </style>
+</head>
+<body>
+  <section class="auth-screen" id="authScreen">
+    <aside class="auth-panel">
+      <div class="auth-brand">
+        <div class="brand-mark" aria-hidden="true">
+          <svg viewBox="0 0 24 24"><path d="M6 20h12"/><path d="M8 20V8l4-4 4 4v12"/><path d="M9 12h6"/><path d="M9 16h6"/></svg>
+        </div>
+        <div>
+          <strong>Justra</strong>
+          <span>Jurimetria trabalhista</span>
+        </div>
+      </div>
+
+      <div class="auth-copy">
+        <h1>Acesse a base local do TRT2</h1>
+        <p>Entre com uma conta de teste, cadastre um usuário local ou simule Google Sign-In para validar a experiência antes do backend real.</p>
+      </div>
+
+      <div class="auth-stats">
+        <div class="auth-stat"><strong>500</strong><span>meta de decisões no v0</span></div>
+        <div class="auth-stat"><strong>14</strong><span>classes de pedidos</span></div>
+        <div class="auth-stat"><strong>TRT2</strong><span>recorte inicial</span></div>
+      </div>
+
+      <div class="auth-note">
+        Ambiente local de validação.
+      </div>
+    </aside>
+
+    <main class="auth-form-wrap">
+      <section class="auth-card">
+        <h2>Entrar</h2>
+        <p>Escolha uma forma de acesso para continuar.</p>
+
+        <div class="auth-tabs" aria-label="Modo de autenticação">
+          <button class="active" id="loginTab" type="button">Login</button>
+          <button id="signupTab" type="button">Cadastro</button>
+        </div>
+
+        <form class="auth-form" id="loginForm">
+          <div class="field">
+            <label for="loginEmail">E-mail</label>
+            <input id="loginEmail" type="email" autocomplete="email" required>
+          </div>
+          <div class="field">
+            <label for="loginPassword">Senha</label>
+            <input id="loginPassword" type="password" autocomplete="current-password" required>
+          </div>
+          <button class="command-btn" type="submit">
+            <svg viewBox="0 0 24 24"><path d="M5 12h14"/><path d="M13 6l6 6-6 6"/></svg>
+            Entrar
+          </button>
+        </form>
+
+        <form class="auth-form hidden" id="signupForm">
+          <div class="field">
+            <label for="signupName">Nome</label>
+            <input id="signupName" type="text" autocomplete="name" required>
+          </div>
+          <div class="field">
+            <label for="signupEmail">E-mail</label>
+            <input id="signupEmail" type="email" autocomplete="email" required>
+          </div>
+          <div class="field">
+            <label for="signupPassword">Senha</label>
+            <input id="signupPassword" type="password" autocomplete="new-password" minlength="8" required>
+          </div>
+          <button class="command-btn" type="submit">
+            <svg viewBox="0 0 24 24"><path d="M12 5v14"/><path d="M5 12h14"/></svg>
+            Criar conta
+          </button>
+        </form>
+
+        <div class="auth-divider">ou</div>
+        <button class="google-btn" id="googleBtn" type="button">
+          <span class="google-dot">G</span>
+          Continuar com Google
+        </button>
+        <div id="authMessage" class="auth-message" role="status"></div>
+      </section>
+    </main>
+  </section>
+
+  <div class="shell hidden" id="appShell">
+    <aside class="sidebar">
+      <div class="brand">
+        <div class="brand-mark" aria-hidden="true">
+          <svg viewBox="0 0 24 24"><path d="M6 20h12"/><path d="M8 20V8l4-4 4 4v12"/><path d="M9 12h6"/><path d="M9 16h6"/></svg>
+        </div>
+        <div class="brand-text">
+          <strong>Justra</strong>
+          <span>TRT2 Local</span>
+        </div>
+      </div>
+
+      <nav class="nav" aria-label="Navegação">
+        <button class="active" data-view="overview" title="Visão geral">
+          <svg viewBox="0 0 24 24"><path d="M4 19V5"/><path d="M4 19h16"/><path d="M8 16V9"/><path d="M13 16V6"/><path d="M18 16v-4"/></svg>
+          <span>Visão geral</span>
+        </button>
+        <button data-view="claims" title="Pedidos">
+          <svg viewBox="0 0 24 24"><path d="M5 6h14"/><path d="M5 12h14"/><path d="M5 18h8"/></svg>
+          <span>Pedidos</span>
+        </button>
+        <button data-view="judges" title="Juízes">
+          <svg viewBox="0 0 24 24"><path d="M12 3l8 4-8 4-8-4 8-4z"/><path d="M4 11l8 4 8-4"/><path d="M4 15l8 4 8-4"/></svg>
+          <span>Juízes</span>
+        </button>
+        <button data-view="decisions" title="Decisões">
+          <svg viewBox="0 0 24 24"><path d="M7 3h7l4 4v14H7z"/><path d="M14 3v5h4"/><path d="M10 13h5"/><path d="M10 17h5"/></svg>
+          <span>Decisões</span>
+        </button>
+      </nav>
+
+      <div class="sidebar-foot">
+        Base de teste com dados fictícios inspirados no pipeline local.
+      </div>
+    </aside>
+
+    <main class="main">
+      <header class="topbar">
+        <div class="title">
+          <h1>Jurimetria trabalhista TRT2</h1>
+          <p id="summaryLine">Amostra local por pedido, vara, juiz e desfecho.</p>
+        </div>
+        <div class="actions">
+          <div class="user-chip" id="userChip" title="Usuário atual">
+            <span class="avatar" id="userAvatar">J</span>
+            <span id="userName">Justra</span>
+          </div>
+          <button class="icon-btn" id="resetBtn" title="Limpar filtros" aria-label="Limpar filtros">
+            <svg viewBox="0 0 24 24"><path d="M21 12a9 9 0 1 1-3-6.7"/><path d="M21 3v6h-6"/></svg>
+          </button>
+          <button class="icon-btn" id="logoutBtn" title="Sair" aria-label="Sair">
+            <svg viewBox="0 0 24 24"><path d="M10 17l5-5-5-5"/><path d="M15 12H3"/><path d="M21 4v16"/></svg>
+          </button>
+          <button class="command-btn" id="exportBtn" title="Exportar CSV">
+            <svg viewBox="0 0 24 24"><path d="M12 3v12"/><path d="M7 10l5 5 5-5"/><path d="M5 21h14"/></svg>
+            Exportar CSV
+          </button>
+        </div>
+      </header>
+
+      <section class="filters" aria-label="Filtros">
+        <div class="field">
+          <label for="searchInput">Busca</label>
+          <input id="searchInput" type="search" placeholder="vara, juiz, pedido, fundamento">
+        </div>
+        <div class="field">
+          <label for="claimFilter">Pedido</label>
+          <select id="claimFilter"></select>
+        </div>
+        <div class="field">
+          <label for="unitFilter">Vara</label>
+          <select id="unitFilter"></select>
+        </div>
+        <div class="field">
+          <label for="outcomeFilter">Desfecho</label>
+          <select id="outcomeFilter"></select>
+        </div>
+      </section>
+
+      <section class="metrics" aria-label="Métricas principais">
+        <div class="metric">
+          <span>Documentos</span>
+          <strong id="metricDocs">0</strong>
+          <small id="metricDocsSub">TRT2 público</small>
+        </div>
+        <div class="metric">
+          <span>Pedidos identificados</span>
+          <strong id="metricClaims">0</strong>
+          <small id="metricClaimsSub">classes trabalhistas</small>
+        </div>
+        <div class="metric">
+          <span>Mais comum</span>
+          <strong id="metricTopClaim">-</strong>
+          <small id="metricTopClaimSub">pedido no filtro atual</small>
+        </div>
+        <div class="metric">
+          <span>Procedência total/parcial</span>
+          <strong id="metricSuccess">0%</strong>
+          <small id="metricSuccessSub">por decisão filtrada</small>
+        </div>
+      </section>
+
+      <div class="grid">
+        <section class="panel" id="leftPanel">
+          <div class="panel-head">
+            <h2 id="primaryTitle">Pedidos mais frequentes</h2>
+            <div class="segmented" id="chartMode" aria-label="Modo do gráfico">
+              <button class="active" data-mode="claims">Pedidos</button>
+              <button data-mode="units">Varas</button>
+              <button data-mode="judges">Juízes</button>
+            </div>
+          </div>
+          <div class="panel-body">
+            <div class="bar-list" id="barList"></div>
+          </div>
+        </section>
+
+        <section class="panel">
+          <div class="panel-head">
+            <h2>Desfecho por pedido</h2>
+          </div>
+          <div class="panel-body">
+            <div class="outcomes" id="outcomeList"></div>
+            <div class="legend">
+              <span><i class="procedente"></i>Procedente</span>
+              <span><i class="parcial"></i>Parcial</span>
+              <span><i class="improcedente"></i>Improcedente</span>
+              <span><i class="na"></i>Não identificado</span>
+            </div>
+          </div>
+        </section>
+
+        <section class="panel" id="heatPanel">
+          <div class="panel-head">
+            <h2>Mapa de pedidos</h2>
+          </div>
+          <div class="panel-body">
+            <div class="heatmap" id="heatmap"></div>
+          </div>
+        </section>
+
+        <section class="panel">
+          <div class="panel-head">
+            <h2>Decisões</h2>
+            <span class="tag teal" id="decisionCount">0</span>
+          </div>
+          <div class="panel-body">
+            <div class="decision-list" id="decisionList"></div>
+          </div>
+        </section>
+      </div>
+    </main>
+
+    <aside class="side">
+      <div class="detail" id="detail"></div>
+    </aside>
+  </div>
+
+  <script>
+    const GOOGLE_CLIENT_ID = "";
+    const AUTH_USERS_KEY = "justra.auth.users";
+    const AUTH_SESSION_KEY = "justra.auth.session";
+
+    const decisions = [
+      {
+        id: "TRT2-0001",
+        process: "1000123-45.2024.5.02.0001",
+        unit: "1ª Vara do Trabalho de São Paulo",
+        judge: "Marina Duarte",
+        claim: "horas_extras",
+        outcome: "procedente_parcial",
+        date: "2025-01-10",
+        value: 128000,
+        confidence: 0.86,
+        title: "Controle de jornada e cartões de ponto inconsistentes",
+        grounds: "Cartões de ponto com marcações uniformes e prova oral convergente sobre extrapolação habitual.",
+        excerpt: "A prova testemunhal confirmou a permanência após o encerramento formal da jornada."
+      },
+      {
+        id: "TRT2-0002",
+        process: "1000456-19.2024.5.02.0032",
+        unit: "32ª Vara do Trabalho de São Paulo",
+        judge: "Rafael Tavares",
+        claim: "dano_moral",
+        outcome: "improcedente",
+        date: "2025-02-04",
+        value: 42000,
+        confidence: 0.78,
+        title: "Cobrança de metas sem prova de exposição vexatória",
+        grounds: "Ausência de prova de ato ilícito específico e de dano extrapatrimonial indenizável.",
+        excerpt: "A cobrança de desempenho, isoladamente, não demonstrou abuso patronal."
+      },
+      {
+        id: "TRT2-0003",
+        process: "1000789-74.2023.5.02.0443",
+        unit: "3ª Vara do Trabalho de Santos",
+        judge: "Helena Prado",
+        claim: "adicional_insalubridade",
+        outcome: "procedente",
+        date: "2025-03-22",
+        value: 76000,
+        confidence: 0.91,
+        title: "Laudo pericial confirma agente insalubre em grau médio",
+        grounds: "Perícia técnica reconheceu exposição habitual a agentes químicos sem EPI eficaz.",
+        excerpt: "O fornecimento formal de equipamento não afastou a habitualidade da exposição."
+      },
+      {
+        id: "TRT2-0004",
+        process: "1000888-31.2024.5.02.0065",
+        unit: "65ª Vara do Trabalho de São Paulo",
+        judge: "Caio Meirelles",
+        claim: "vinculo_empregaticio",
+        outcome: "procedente",
+        date: "2025-04-11",
+        value: 184000,
+        confidence: 0.82,
+        title: "Plataforma digital e subordinação algorítmica",
+        grounds: "Conjunto probatório indicou pessoalidade, onerosidade, habitualidade e controle operacional.",
+        excerpt: "A autonomia formal não prevalece diante da ingerência direta na execução do trabalho."
+      },
+      {
+        id: "TRT2-0005",
+        process: "1000930-50.2024.5.02.0021",
+        unit: "21ª Vara do Trabalho de São Paulo",
+        judge: "Bianca Nogueira",
+        claim: "intervalo_intrajornada",
+        outcome: "procedente_parcial",
+        date: "2025-04-29",
+        value: 52000,
+        confidence: 0.74,
+        title: "Supressão parcial de intervalo em turnos alternados",
+        grounds: "Prova documental indicou fruição parcial em parte do período contratual.",
+        excerpt: "A condenação limita-se aos dias em que o intervalo mínimo não foi observado."
+      },
+      {
+        id: "TRT2-0006",
+        process: "1001022-21.2023.5.02.0202",
+        unit: "2ª Vara do Trabalho de Osasco",
+        judge: "Sofia Martins",
+        claim: "verbas_rescisorias",
+        outcome: "procedente_parcial",
+        date: "2025-05-08",
+        value: 39000,
+        confidence: 0.8,
+        title: "Diferenças rescisórias após quitação parcial",
+        grounds: "Recibos comprovam pagamento de parte das parcelas, remanescendo diferenças de férias e décimo terceiro.",
+        excerpt: "A quitação não abrange verbas expressamente ressalvadas na inicial."
+      },
+      {
+        id: "TRT2-0007",
+        process: "1001144-58.2024.5.02.0318",
+        unit: "18ª Vara do Trabalho de Guarulhos",
+        judge: "Marina Duarte",
+        claim: "adicional_periculosidade",
+        outcome: "improcedente",
+        date: "2025-05-19",
+        value: 69000,
+        confidence: 0.76,
+        title: "Contato eventual com área de risco",
+        grounds: "Laudo pericial afastou permanência habitual em área de risco acentuado.",
+        excerpt: "O ingresso eventual não caracteriza exposição permanente ou intermitente relevante."
+      },
+      {
+        id: "TRT2-0008",
+        process: "1001320-37.2024.5.02.0078",
+        unit: "78ª Vara do Trabalho de São Paulo",
+        judge: "Rafael Tavares",
+        claim: "fgts",
+        outcome: "procedente",
+        date: "2025-06-02",
+        value: 31000,
+        confidence: 0.88,
+        title: "Depósitos de FGTS não comprovados",
+        grounds: "Extrato analítico revelou lacunas mensais sem prova de recolhimento pela reclamada.",
+        excerpt: "A regularidade dos depósitos é ônus documental da empregadora."
+      },
+      {
+        id: "TRT2-0009",
+        process: "1001477-10.2024.5.02.0001",
+        unit: "1ª Vara do Trabalho de São Paulo",
+        judge: "Helena Prado",
+        claim: "multa_477",
+        outcome: "procedente",
+        date: "2025-06-24",
+        value: 18000,
+        confidence: 0.84,
+        title: "Atraso no pagamento das verbas rescisórias",
+        grounds: "Comprovado pagamento fora do prazo legal sem controvérsia substancial sobre o vínculo.",
+        excerpt: "A mora rescisória atrai a penalidade prevista no art. 477 da CLT."
+      },
+      {
+        id: "TRT2-0010",
+        process: "1001512-83.2023.5.02.0443",
+        unit: "3ª Vara do Trabalho de Santos",
+        judge: "Caio Meirelles",
+        claim: "equiparacao_salarial",
+        outcome: "nao_identificado",
+        date: "2025-07-03",
+        value: 93000,
+        confidence: 0.58,
+        title: "Paradigma indicado com funções parcialmente distintas",
+        grounds: "Trechos decisórios exigem validação manual quanto ao resultado específico do pedido.",
+        excerpt: "A prova técnica descreve tarefas com interseção parcial entre reclamante e paradigma."
+      }
+    ];
+
+    const claimLabels = {
+      horas_extras: "Horas extras",
+      dano_moral: "Dano moral",
+      verbas_rescisorias: "Verbas rescisórias",
+      adicional_insalubridade: "Insalubridade",
+      adicional_periculosidade: "Periculosidade",
+      vinculo_empregaticio: "Vínculo empregatício",
+      equiparacao_salarial: "Equiparação salarial",
+      intervalo_intrajornada: "Intervalo intrajornada",
+      multa_477: "Multa 477",
+      fgts: "FGTS"
+    };
+
+    const outcomeLabels = {
+      procedente: "Procedente",
+      procedente_parcial: "Parcial",
+      improcedente: "Improcedente",
+      acordo: "Acordo",
+      extinto: "Extinto",
+      nao_identificado: "Não identificado"
+    };
+
+    const outcomeClasses = {
+      procedente: "olive",
+      procedente_parcial: "amber",
+      improcedente: "red",
+      acordo: "plum",
+      extinto: "plum",
+      nao_identificado: "teal"
+    };
+
+    const state = {
+      view: "overview",
+      chartMode: "claims",
+      selectedId: decisions[0].id
+    };
+
+    const $ = (selector) => document.querySelector(selector);
+    const $$ = (selector) => Array.from(document.querySelectorAll(selector));
+
+    function loadUsers() {
+      return JSON.parse(localStorage.getItem(AUTH_USERS_KEY) || "[]");
+    }
+
+    async function hashPassword(password, salt) {
+      if (!globalThis.crypto?.subtle) {
+        return `local:${btoa(unescape(encodeURIComponent(`${salt}:${password}`)))}`;
+      }
+      const data = new TextEncoder().encode(`${salt}:${password}`);
+      const hash = await crypto.subtle.digest("SHA-256", data);
+      return [...new Uint8Array(hash)].map(byte => byte.toString(16).padStart(2, "0")).join("");
+    }
+
+    function setAuthMessage(message, ok = false) {
+      const node = $("#authMessage");
+      node.textContent = message;
+      node.classList.toggle("ok", ok);
+    }
+
+    function setSession(user) {
+      const session = {
+        id: user.id,
+        name: user.name,
+        email: user.email,
+        provider: user.provider,
+        signedAt: new Date().toISOString()
+      };
+      localStorage.setItem(AUTH_SESSION_KEY, JSON.stringify(session));
+      showApp(session);
+    }
+
+    function getSession() {
+      return JSON.parse(localStorage.getItem(AUTH_SESSION_KEY) || "null");
+    }
+
+    function clearSession() {
+      localStorage.removeItem(AUTH_SESSION_KEY);
+      $("#appShell").classList.add("hidden");
+      $("#authScreen").classList.remove("hidden");
+      setAuthMessage("");
+    }
+
+    function initials(nameOrEmail) {
+      const value = String(nameOrEmail || "J").trim();
+      const parts = value.includes("@") ? [value[0]] : value.split(/\s+/);
+      return parts.slice(0, 2).map(part => part[0] || "").join("").toUpperCase();
+    }
+
+    function showApp(session) {
+      $("#authScreen").classList.add("hidden");
+      $("#appShell").classList.remove("hidden");
+      $("#userName").textContent = session.name || session.email;
+      $("#userAvatar").textContent = initials(session.name || session.email);
+      render();
+    }
+
+    function switchAuthMode(mode) {
+      const login = mode === "login";
+      $("#loginTab").classList.toggle("active", login);
+      $("#signupTab").classList.toggle("active", !login);
+      $("#loginForm").classList.toggle("hidden", !login);
+      $("#signupForm").classList.toggle("hidden", login);
+      setAuthMessage("");
+    }
+
+    async function loginWithPassword(event) {
+      event.preventDefault();
+      const email = $("#loginEmail").value.trim().toLowerCase();
+      const password = $("#loginPassword").value;
+      const users = loadUsers();
+      const user = users.find(item => item.email === email && item.provider === "local");
+      if (!user) {
+        setAuthMessage("Usuário não encontrado.");
+        return;
+      }
+      const hash = await hashPassword(password, email);
+      if (hash !== user.passwordHash) {
+        setAuthMessage("Senha inválida.");
+        return;
+      }
+      setSession(user);
+    }
+
+    async function signupWithPassword(event) {
+      event.preventDefault();
+      const name = $("#signupName").value.trim();
+      const email = $("#signupEmail").value.trim().toLowerCase();
+      const password = $("#signupPassword").value;
+      if (password.length < 8) {
+        setAuthMessage("A senha precisa ter pelo menos 8 caracteres.");
+        return;
+      }
+      const users = loadUsers();
+      if (users.some(user => user.email === email)) {
+        setAuthMessage("Este e-mail já está cadastrado.");
+        return;
+      }
+      const user = {
+        id: `local:${email}`,
+        name,
+        email,
+        provider: "local",
+        passwordHash: await hashPassword(password, email)
+      };
+      users.push(user);
+      localStorage.setItem(AUTH_USERS_KEY, JSON.stringify(users));
+      setAuthMessage("Conta criada. Entrando...", true);
+      setSession(user);
+    }
+
+    function loginWithGoogleDemo() {
+      setSession({
+        id: "google:demo",
+        name: "Conta Google Demo",
+        email: "google.demo@justra.local",
+        provider: "google"
+      });
+    }
+
+    function decodeJwtPayload(token) {
+      const payload = token.split(".")[1] || "";
+      const normalized = payload.replace(/-/g, "+").replace(/_/g, "/");
+      return JSON.parse(decodeURIComponent(escape(atob(normalized))));
+    }
+
+    function loadGoogleLibrary() {
+      return new Promise(resolve => {
+        if (!GOOGLE_CLIENT_ID || window.google?.accounts?.id) {
+          resolve();
+          return;
+        }
+        const script = document.createElement("script");
+        script.src = "https://accounts.google.com/gsi/client";
+        script.async = true;
+        script.defer = true;
+        script.onload = resolve;
+        script.onerror = resolve;
+        document.head.appendChild(script);
+      });
+    }
+
+    async function initializeGoogleSignIn() {
+      await loadGoogleLibrary();
+      if (!GOOGLE_CLIENT_ID || !window.google?.accounts?.id) return;
+      window.google.accounts.id.initialize({
+        client_id: GOOGLE_CLIENT_ID,
+        callback: response => {
+          const profile = decodeJwtPayload(response.credential);
+          setSession({
+            id: `google:${profile.sub}`,
+            name: profile.name,
+            email: profile.email,
+            provider: "google"
+          });
+        }
+      });
+    }
+
+    function handleGoogleClick() {
+      if (GOOGLE_CLIENT_ID && window.google?.accounts?.id) {
+        window.google.accounts.id.prompt();
+        return;
+      }
+      setAuthMessage("Google real sem Client ID. Entrando em modo demo.", true);
+      window.setTimeout(loginWithGoogleDemo, 350);
+    }
+
+    async function bootAuth() {
+      loadUsers();
+      await initializeGoogleSignIn();
+      $("#loginTab").addEventListener("click", () => switchAuthMode("login"));
+      $("#signupTab").addEventListener("click", () => switchAuthMode("signup"));
+      $("#loginForm").addEventListener("submit", loginWithPassword);
+      $("#signupForm").addEventListener("submit", signupWithPassword);
+      $("#googleBtn").addEventListener("click", handleGoogleClick);
+      $("#logoutBtn").addEventListener("click", clearSession);
+      const session = getSession();
+      if (session) showApp(session);
+    }
+
+    function formatMoney(value) {
+      return new Intl.NumberFormat("pt-BR", {
+        style: "currency",
+        currency: "BRL",
+        maximumFractionDigits: 0
+      }).format(value);
+    }
+
+    function normalize(value) {
+      return String(value || "")
+        .normalize("NFD")
+        .replace(/[\u0300-\u036f]/g, "")
+        .toLowerCase();
+    }
+
+    function countBy(rows, keyFn) {
+      return rows.reduce((acc, row) => {
+        const key = keyFn(row);
+        acc[key] = (acc[key] || 0) + 1;
+        return acc;
+      }, {});
+    }
+
+    function optionHTML(value, label) {
+      return `<option value="${value}">${label}</option>`;
+    }
+
+    function populateFilters() {
+      const claimOptions = Object.entries(claimLabels)
+        .map(([value, label]) => optionHTML(value, label))
+        .join("");
+      const units = [...new Set(decisions.map(item => item.unit))].sort();
+      const outcomes = Object.entries(outcomeLabels);
+
+      $("#claimFilter").innerHTML = optionHTML("", "Todos") + claimOptions;
+      $("#unitFilter").innerHTML = optionHTML("", "Todas") + units.map(unit => optionHTML(unit, unit)).join("");
+      $("#outcomeFilter").innerHTML = optionHTML("", "Todos") + outcomes.map(([value, label]) => optionHTML(value, label)).join("");
+    }
+
+    function filteredRows() {
+      const query = normalize($("#searchInput").value);
+      const claim = $("#claimFilter").value;
+      const unit = $("#unitFilter").value;
+      const outcome = $("#outcomeFilter").value;
+
+      return decisions.filter(item => {
+        const text = normalize([item.unit, item.judge, claimLabels[item.claim], outcomeLabels[item.outcome], item.title, item.grounds, item.process].join(" "));
+        return (!query || text.includes(query))
+          && (!claim || item.claim === claim)
+          && (!unit || item.unit === unit)
+          && (!outcome || item.outcome === outcome);
+      });
+    }
+
+    function renderMetrics(rows) {
+      const claimCounts = countBy(rows, item => item.claim);
+      const topClaim = Object.entries(claimCounts).sort((a, b) => b[1] - a[1])[0];
+      const successful = rows.filter(item => ["procedente", "procedente_parcial"].includes(item.outcome)).length;
+      const successRate = rows.length ? Math.round((successful / rows.length) * 100) : 0;
+      const uniqueClaims = Object.keys(claimCounts).length;
+
+      $("#metricDocs").textContent = rows.length;
+      $("#metricClaims").textContent = uniqueClaims;
+      $("#metricTopClaim").textContent = topClaim ? claimLabels[topClaim[0]] : "-";
+      $("#metricSuccess").textContent = `${successRate}%`;
+      $("#metricDocsSub").textContent = rows.length === 1 ? "decisão filtrada" : "decisões filtradas";
+      $("#metricClaimsSub").textContent = uniqueClaims === 1 ? "classe encontrada" : "classes encontradas";
+      $("#metricTopClaimSub").textContent = topClaim ? `${topClaim[1]} ocorrência(s)` : "sem ocorrência";
+      $("#metricSuccessSub").textContent = `${successful} com acolhimento`;
+      $("#summaryLine").textContent = `${rows.length} documentos no recorte atual`;
+    }
+
+    function renderBars(rows) {
+      const mode = state.chartMode;
+      const titleByMode = {
+        claims: "Pedidos mais frequentes",
+        units: "Varas com mais decisões",
+        judges: "Juízes/relatores no recorte"
+      };
+      const keyFnByMode = {
+        claims: item => claimLabels[item.claim],
+        units: item => item.unit,
+        judges: item => item.judge
+      };
+      const counts = countBy(rows, keyFnByMode[mode]);
+      const entries = Object.entries(counts).sort((a, b) => b[1] - a[1]).slice(0, 8);
+      const max = entries.length ? Math.max(...entries.map(([, value]) => value)) : 1;
+
+      $("#primaryTitle").textContent = titleByMode[mode];
+      $("#barList").innerHTML = entries.length ? entries.map(([label, value]) => `
+        <div class="bar-row">
+          <div class="bar-label" title="${label}">${label}</div>
+          <div class="bar-track"><div class="bar-fill" style="width: ${(value / max) * 100}%"></div></div>
+          <div class="bar-value">${value}</div>
+        </div>
+      `).join("") : `<div class="empty">Sem dados no recorte atual.</div>`;
+    }
+
+    function renderOutcomes(rows) {
+      const claims = Object.keys(countBy(rows, item => item.claim));
+      const html = claims.map(claim => {
+        const subset = rows.filter(item => item.claim === claim);
+        const total = subset.length || 1;
+        const counts = countBy(subset, item => item.outcome);
+        const p = Math.round(((counts.procedente || 0) / total) * 100);
+        const pp = Math.round(((counts.procedente_parcial || 0) / total) * 100);
+        const i = Math.round(((counts.improcedente || 0) / total) * 100);
+        const n = Math.max(0, 100 - p - pp - i);
+        return `
+          <div class="outcome-row">
+            <div class="outcome-title">
+              <span>${claimLabels[claim]}</span>
+              <span>${subset.length}</span>
+            </div>
+            <div class="stack" aria-label="${claimLabels[claim]}">
+              <span class="procedente" style="width: ${p}%"></span>
+              <span class="parcial" style="width: ${pp}%"></span>
+              <span class="improcedente" style="width: ${i}%"></span>
+              <span class="na" style="width: ${n}%"></span>
+            </div>
+          </div>
+        `;
+      }).join("");
+
+      $("#outcomeList").innerHTML = html || `<div class="empty">Sem dados no recorte atual.</div>`;
+    }
+
+    function renderHeatmap(rows) {
+      const claims = Object.keys(countBy(rows, item => item.claim)).slice(0, 6);
+      const outcomes = ["procedente", "procedente_parcial", "improcedente", "nao_identificado"];
+      let html = `<div></div>${outcomes.map(item => `<div class="heat-head">${outcomeLabels[item]}</div>`).join("")}`;
+
+      claims.forEach(claim => {
+        html += `<div class="heat-label">${claimLabels[claim]}</div>`;
+        outcomes.forEach(outcome => {
+          const count = rows.filter(item => item.claim === claim && item.outcome === outcome).length;
+          const opacity = count ? Math.min(.95, .28 + count * .22) : .08;
+          html += `<div class="heat-cell" style="background: rgba(11, 107, 90, ${opacity})">${count}</div>`;
+        });
+      });
+
+      $("#heatmap").innerHTML = claims.length ? html : `<div class="empty">Sem dados no recorte atual.</div>`;
+    }
+
+    function renderDecisions(rows) {
+      $("#decisionCount").textContent = rows.length;
+      if (!rows.some(item => item.id === state.selectedId) && rows[0]) {
+        state.selectedId = rows[0].id;
+      }
+
+      $("#decisionList").innerHTML = rows.length ? rows.map(item => `
+        <button class="decision-item ${item.id === state.selectedId ? "active" : ""}" data-id="${item.id}">
+          <span class="decision-main">
+            <span class="decision-title">${item.title}</span>
+            <span class="decision-meta">
+              <span>${item.process}</span>
+              <span>${item.unit}</span>
+              <span>${item.judge}</span>
+            </span>
+          </span>
+          <span class="tag ${outcomeClasses[item.outcome]}">${outcomeLabels[item.outcome]}</span>
+        </button>
+      `).join("") : `<div class="empty">Sem decisões no recorte atual.</div>`;
+
+      $$(".decision-item").forEach(button => {
+        button.addEventListener("click", () => {
+          state.selectedId = button.dataset.id;
+          render();
+        });
+      });
+    }
+
+    function renderDetail(rows) {
+      const selected = rows.find(item => item.id === state.selectedId) || rows[0];
+      if (!selected) {
+        $("#detail").innerHTML = `<div class="empty">Sem decisão selecionada.</div>`;
+        return;
+      }
+
+      $("#detail").innerHTML = `
+        <div class="detail-header">
+          <span class="tag ${outcomeClasses[selected.outcome]}">${outcomeLabels[selected.outcome]}</span>
+          <h2>${selected.title}</h2>
+          <p>${selected.grounds}</p>
+        </div>
+        <div class="detail-grid">
+          <div class="fact"><span>Processo</span><strong>${selected.process}</strong></div>
+          <div class="fact"><span>Pedido</span><strong>${claimLabels[selected.claim]}</strong></div>
+          <div class="fact"><span>Vara</span><strong>${selected.unit}</strong></div>
+          <div class="fact"><span>Juiz</span><strong>${selected.judge}</strong></div>
+          <div class="fact"><span>Valor estimado</span><strong>${formatMoney(selected.value)}</strong></div>
+          <div class="fact"><span>Confiança</span><strong>${Math.round(selected.confidence * 100)}%</strong></div>
+        </div>
+        <div class="quote">${selected.excerpt}</div>
+        <section class="panel">
+          <div class="panel-head"><h2>Comparáveis</h2></div>
+          <div class="panel-body">
+            <table class="mini-table">
+              <thead><tr><th>Recorte</th><th>Total</th><th>Acolhimento</th></tr></thead>
+              <tbody>
+                ${comparisonRows(selected)}
+              </tbody>
+            </table>
+          </div>
+        </section>
+      `;
+    }
+
+    function comparisonRows(selected) {
+      const sameClaim = decisions.filter(item => item.claim === selected.claim);
+      const sameUnit = decisions.filter(item => item.unit === selected.unit);
+      const sameJudge = decisions.filter(item => item.judge === selected.judge);
+      return [
+        ["Mesmo pedido", sameClaim],
+        ["Mesma vara", sameUnit],
+        ["Mesmo juiz", sameJudge]
+      ].map(([label, rows]) => {
+        const success = rows.filter(item => ["procedente", "procedente_parcial"].includes(item.outcome)).length;
+        const rate = rows.length ? Math.round((success / rows.length) * 100) : 0;
+        return `<tr><td>${label}</td><td>${rows.length}</td><td>${rate}%</td></tr>`;
+      }).join("");
+    }
+
+    function applyView() {
+      if (state.view === "claims") state.chartMode = "claims";
+      if (state.view === "judges") state.chartMode = "judges";
+      if (state.view === "decisions") state.chartMode = "units";
+
+      $$(".nav button").forEach(button => {
+        button.classList.toggle("active", button.dataset.view === state.view);
+      });
+      $$("#chartMode button").forEach(button => {
+        button.classList.toggle("active", button.dataset.mode === state.chartMode);
+      });
+    }
+
+    function render() {
+      const rows = filteredRows();
+      applyView();
+      renderMetrics(rows);
+      renderBars(rows);
+      renderOutcomes(rows);
+      renderHeatmap(rows);
+      renderDecisions(rows);
+      renderDetail(rows);
+    }
+
+    function exportCsv() {
+      const rows = filteredRows();
+      const headers = ["processo", "vara", "juiz", "pedido", "desfecho", "data", "fundamento"];
+      const csvRows = rows.map(item => [
+        item.process,
+        item.unit,
+        item.judge,
+        claimLabels[item.claim],
+        outcomeLabels[item.outcome],
+        item.date,
+        item.grounds
+      ].map(value => `"${String(value).replaceAll('"', '""')}"`).join(","));
+
+      const blob = new Blob([[headers.join(","), ...csvRows].join("\n")], { type: "text/csv;charset=utf-8" });
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement("a");
+      link.href = url;
+      link.download = "justra_trt2_mock.csv";
+      link.click();
+      URL.revokeObjectURL(url);
+    }
+
+    function resetFilters() {
+      $("#searchInput").value = "";
+      $("#claimFilter").value = "";
+      $("#unitFilter").value = "";
+      $("#outcomeFilter").value = "";
+      state.selectedId = decisions[0].id;
+      render();
+    }
+
+    populateFilters();
+    ["searchInput", "claimFilter", "unitFilter", "outcomeFilter"].forEach(id => {
+      $(`#${id}`).addEventListener("input", render);
+    });
+    $$(".nav button").forEach(button => {
+      button.addEventListener("click", () => {
+        state.view = button.dataset.view;
+        render();
+      });
+    });
+    $$("#chartMode button").forEach(button => {
+      button.addEventListener("click", () => {
+        state.chartMode = button.dataset.mode;
+        render();
+      });
+    });
+    $("#resetBtn").addEventListener("click", resetFilters);
+    $("#exportBtn").addEventListener("click", exportCsv);
+    bootAuth();
+  </script>
+</body>
+</html>
