@@ -4080,6 +4080,15 @@ class JustraApp:
                     "datajud_new_movement_count": int(datajud_record.get("new_movement_count") or 0),
                 }
             )
+        visible_updates = filtered[:300]
+        if len(filtered) > 300:
+            visible_ids = {str(row.get("id") or "") for row in visible_updates}
+            supplemental = [
+                row
+                for row in filtered[300:]
+                if str(row.get("id") or "") not in visible_ids and str(row.get("source_type") or "").lower() != "pje"
+            ]
+            visible_updates.extend(supplemental[:700])
         return {
             "ok": True,
             "summary": {
@@ -4108,7 +4117,7 @@ class JustraApp:
             },
             "filters": {"category": category_filter, "q": search_query},
             "watches": watch_rows,
-            "updates": filtered[:300],
+            "updates": visible_updates,
             "truncated": len(filtered) > 300,
             "latest_manifest_path": index["manifest_path"],
             "active_manifest_paths": index.get("manifest_paths") or [],

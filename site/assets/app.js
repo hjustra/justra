@@ -1918,6 +1918,17 @@ function updateRowTimeValue(item = {}) {
   return Number.isNaN(parsed) ? 0 : parsed;
 }
 
+function processCenterFallbackUpdate(rows = []) {
+  const rank = { djen: 4, pje: 3, datajud: 2 };
+  return (rows || [])
+    .filter((row) => updateRowTimeValue(row))
+    .sort((a, b) => {
+      const sourceOrder = (rank[String(b.source_type || "").toLowerCase()] || 1) - (rank[String(a.source_type || "").toLowerCase()] || 1);
+      if (sourceOrder) return sourceOrder;
+      return updateRowTimeValue(b) - updateRowTimeValue(a);
+    })[0] || {};
+}
+
 function datajudRecordForProcess(processNumber, data = state.updates || {}) {
   const wanted = compactProcessNumber(processNumber);
   return (data.datajud?.records || []).find((record) => compactProcessNumber(record.process_number) === wanted) || {};
@@ -2465,11 +2476,19 @@ function processCenterNextTrackedItem(processNumber, deadlines = state.deadlines
   return processCenterTrackedItems(processNumber, deadlines)[0] || null;
 }
 
-function processCenterDateCell(item = null, summary = {}) {
+function processCenterDateCell(item = null, summary = {}, fallbackUpdate = {}) {
   if (item) return deadlineDateCell(item);
   const dateValue = summary.next_due_date || summary.next_calendar_date || "";
   const label = summary.due_label || summary.calendar_label || "";
-  if (!dateValue) return `<span class="muted">sem prazo/data ativa</span>`;
+  if (!dateValue) {
+    const updateLabel = updateDateLabel(fallbackUpdate);
+    if (fallbackUpdate?.id && updateLabel && updateLabel !== "data não informada") {
+      const source = fallbackUpdate.source_label || (fallbackUpdate.source_type === "pje" ? "PJe" : fallbackUpdate.source_type === "datajud" ? "DataJud" : "DJEN");
+      const detail = fallbackUpdate.category_label || fallbackUpdate.document_type || fallbackUpdate.communication_type || "movimentação";
+      return `<strong>${escapeHtml(updateLabel)}</strong><br><span class="muted">${escapeHtml(`${source} · ${detail}`)}</span>`;
+    }
+    return `<span class="muted">sem prazo/data ativa</span>`;
+  }
   return `<strong>${escapeHtml(formatDataJudDate(dateValue))}</strong><br><span class="muted">${escapeHtml(label || "revisar no PJe")}</span>`;
 }
 
@@ -2571,11 +2590,13 @@ function renderProcessCenter(data = state.processCenter || {}) {
       const caseItem = byProcess.get(processNumber) || byId.get(watch.case_id) || {};
       const timelineRows = timelineRowsForProcess(processNumber, updates);
       const latest = watch.last_update || timelineRows[0] || {};
+      const fallbackUpdate = processCenterFallbackUpdate(timelineRows) || latest;
       return {
         watch,
         processNumber,
         caseItem,
         latest,
+        fallbackUpdate,
         summary: summaries[processNumber] || {},
         nextTrackedItem: processCenterNextTrackedItem(processNumber, deadlines),
       };
@@ -2589,7 +2610,7 @@ function renderProcessCenter(data = state.processCenter || {}) {
   const activeDate = deadlines.summary?.active_date_range || updates.summary?.active_date_range || "";
   $("#processCenterMeta").textContent = `${fmt(rows.length)} processos${activeDate ? ` · janela ${activeDate}` : ""}`;
   $("#processCenterRows").innerHTML = rows.length
-    ? rows.map(({ watch, processNumber, caseItem, latest, summary, nextTrackedItem }) => {
+    ? rows.map(({ watch, processNumber, caseItem, latest, fallbackUpdate, summary, nextTrackedItem }) => {
         const selected = processNumber === compactProcessNumber(state.updateTimelineProcess);
         const processLabel = watch.process_number_masked || caseItem.process_number || formatCompactProcessNumber(processNumber);
         const title = caseItem.title || watch.title || `Processo ${processLabel}`;
@@ -2613,7 +2634,7 @@ function renderProcessCenter(data = state.processCenter || {}) {
           : "";
         return `<tr class="${selected ? "selected-row" : ""}">
           <td><strong>${escapeHtml(processLabel)}</strong><br><span class="muted">${escapeHtml(short(title, 70))}</span></td>
-          <td>${processCenterDateCell(nextTrackedItem, summary)}</td>
+          <td>${processCenterDateCell(nextTrackedItem, summary, fallbackUpdate || latest)}</td>
           <td>${court || `<span class="muted">—</span>`}</td>
           <td>${escapeHtml(short(type, 54))}</td>
           <td>${escapeHtml(short(people, 90))}</td>
