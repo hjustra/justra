@@ -4,6 +4,8 @@ import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
+from justra_runtime_paths import DATA_ROOT, LOG_ROOT  # noqa: E402
+
 sys.path.insert(0, str(ROOT / "src"))
 
 from collectors.basis_trt2 import (
@@ -32,7 +34,7 @@ def main() -> None:
         queries = [args.query]
         per_query_limit = args.limit
 
-    output_path = ROOT / "data/raw/json/document_index.json"
+    output_path = DATA_ROOT / "raw" / "json" / "document_index.json"
 
     if len(queries) > 1 or args.all:
         records = collect_many(

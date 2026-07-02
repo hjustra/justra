@@ -11,7 +11,8 @@ from typing import Any, Iterable
 import duckdb
 
 ROOT = Path(__file__).resolve().parents[1]
-KNOWLEDGE_DIR = ROOT / "data" / "knowledge"
+from justra_runtime_paths import DATA_ROOT, LOG_ROOT  # noqa: E402
+KNOWLEDGE_DIR = DATA_ROOT / "knowledge"
 TRT2_DIR = KNOWLEDGE_DIR / "trt2_basis"
 DEFAULT_DB = KNOWLEDGE_DIR / "knowledge.duckdb"
 DEFAULT_REPORT = ROOT / "reports" / "data_audit_trt2.html"

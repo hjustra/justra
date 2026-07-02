@@ -14,14 +14,15 @@ from typing import Any
 import requests
 
 ROOT = Path(__file__).resolve().parents[1]
+from justra_runtime_paths import DATA_ROOT, LOG_ROOT  # noqa: E402
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from src.collectors.pje_trt2 import PjePublicClient, format_cnj_number, is_captcha_challenge, only_digits
 
 
-DEFAULT_INPUT = ROOT / "data" / "cases" / "guarulhos_horas_extras" / "processed" / "processes.csv"
-DEFAULT_OUTPUT = ROOT / "data" / "cases" / "guarulhos_horas_extras" / "pje_public"
+DEFAULT_INPUT = DATA_ROOT / "cases" / "guarulhos_horas_extras" / "processed" / "processes.csv"
+DEFAULT_OUTPUT = DATA_ROOT / "cases" / "guarulhos_horas_extras" / "pje_public"
 
 
 def now_iso() -> str:

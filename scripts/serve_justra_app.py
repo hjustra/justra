@@ -36,11 +36,12 @@ import requests
 from dotenv import load_dotenv
 
 ROOT = Path(__file__).resolve().parents[1]
-DEFAULT_DB = ROOT / "data" / "mvp" / "trt2" / "trt2_mvp.duckdb"
-KNOWLEDGE_DB = ROOT / "data" / "knowledge" / "knowledge.duckdb"
+from justra_runtime_paths import DATA_ROOT, LOG_ROOT  # noqa: E402
+DEFAULT_DB = DATA_ROOT / "mvp" / "trt2" / "trt2_mvp.duckdb"
+KNOWLEDGE_DB = DATA_ROOT / "knowledge" / "knowledge.duckdb"
 SITE_DIR = ROOT / "site"
 CONFIG_PATH = ROOT / "config" / "bot_controls.json"
-APP_DATA_DIR = ROOT / "data" / "app"
+APP_DATA_DIR = DATA_ROOT / "app"
 APP_TZ = ZoneInfo("America/Sao_Paulo")
 USERS_PATH = APP_DATA_DIR / "users.json"
 CONVERSATIONS_PATH = APP_DATA_DIR / "conversations.json"
@@ -75,8 +76,12 @@ FALCAO_COLLECTIONS = [
     "recursorevista",
     "precedentes",
 ]
-FALCAO_NODE = "/Users/heitordoamaraljurkovich/.cache/codex-runtimes/codex-primary-runtime/dependencies/node/bin/node"
-KNOWLEDGE_DIR = ROOT / "data" / "knowledge"
+FALCAO_NODE = (
+    os.getenv("JUSTRA_NODE_BIN", "").strip()
+    or shutil.which("node")
+    or "/Users/heitordoamaraljurkovich/.cache/codex-runtimes/codex-primary-runtime/dependencies/node/bin/node"
+)
+KNOWLEDGE_DIR = DATA_ROOT / "knowledge"
 load_dotenv(ROOT / ".env")
 TST_JURIS_URL = "https://jurisprudencia.tst.jus.br/"
 TST_JURIS_TYPE_BY_KIND = {
@@ -274,7 +279,7 @@ def _run_falcao_collection_range_unlocked(
             }
         )
         return
-    log_dir = ROOT / "logs"
+    log_dir = LOG_ROOT
     log_dir.mkdir(parents=True, exist_ok=True)
     command = [
         sys.executable,
@@ -338,13 +343,13 @@ def _run_falcao_collection_range_unlocked(
                 "end_date": end_date,
                 "target_date": start_date if start_date == end_date else "",
                 "output_tag": output_tag,
-                "output_dir": str(ROOT / "data" / "raw" / "falcao" / output_tag),
+                "output_dir": str(DATA_ROOT / "raw" / "falcao" / output_tag),
                 "min_delay_ms": min_delay_ms,
                 "max_delay_ms": max_delay_ms,
             }
         )
         returncode = process.wait()
-    output_dir = ROOT / "data" / "raw" / "falcao" / output_tag
+    output_dir = DATA_ROOT / "raw" / "falcao" / output_tag
     status = load_json_file(output_dir / "status.json", {})
     imported = None
     if returncode in {0, 2} and not status.get("error") and app:
@@ -396,7 +401,7 @@ def _run_falcao_safe_collection(app: "JustraApp | None" = None) -> None:
 def _resume_incomplete_falcao_d1(app: "JustraApp") -> None:
     """Resume an interrupted D-1 checkpoint after an application restart."""
     target_date = (date.today() - timedelta(days=1)).isoformat()
-    output_dir = ROOT / "data" / "raw" / "falcao" / f"daily_{target_date}"
+    output_dir = DATA_ROOT / "raw" / "falcao" / f"daily_{target_date}"
     status = load_json_file(output_dir / "status.json", {})
     control = falcao_control()
     if not status or status.get("complete") or not control.get("enabled") or control.get("blocked"):
@@ -421,7 +426,7 @@ def _falcao_daily_scheduler(stop: threading.Event, app: "JustraApp") -> None:
 
 
 def _latest_djen_manifest() -> tuple[Path | None, dict[str, Any]]:
-    processed_root = ROOT / "data" / "processed" / "djen"
+    processed_root = DATA_ROOT / "processed" / "djen"
     if not processed_root.exists():
         return None, {}
     manifests = sorted(
@@ -439,14 +444,14 @@ def _djen_manifest_for_date(target_date: str) -> tuple[Path | None, dict[str, An
     if not re.fullmatch(r"\d{4}-\d{2}-\d{2}", str(target_date or "")):
         return None, {}
     year, month, day = target_date.split("-")
-    path = ROOT / "data" / "processed" / "djen" / year / month / day / "crawler_manifest.json"
+    path = DATA_ROOT / "processed" / "djen" / year / month / day / "crawler_manifest.json"
     if not path.exists():
         return None, {}
     return path, load_json_file(path, {})
 
 
 def _latest_deadline_manifest() -> tuple[Path | None, dict[str, Any]]:
-    processed_root = ROOT / "data" / "processed" / "djen_deadlines"
+    processed_root = DATA_ROOT / "processed" / "djen_deadlines"
     if not processed_root.exists():
         return None, {}
     manifests = sorted(
@@ -472,7 +477,7 @@ def _deadline_manifest_target_date(path: Path, manifest: dict[str, Any]) -> date
 
 
 def _active_deadline_manifests(lookback_days: int = ACTIVE_DEADLINE_LOOKBACK_DAYS) -> list[tuple[Path, dict[str, Any], date]]:
-    processed_root = ROOT / "data" / "processed" / "djen_deadlines"
+    processed_root = DATA_ROOT / "processed" / "djen_deadlines"
     if not processed_root.exists():
         return []
     today = date.today()
@@ -495,7 +500,7 @@ def _active_deadline_manifests(lookback_days: int = ACTIVE_DEADLINE_LOOKBACK_DAY
 
 
 def _active_djen_manifests(lookback_days: int = ACTIVE_UPDATE_LOOKBACK_DAYS) -> list[tuple[Path, dict[str, Any], date]]:
-    processed_root = ROOT / "data" / "processed" / "djen"
+    processed_root = DATA_ROOT / "processed" / "djen"
     if not processed_root.exists():
         return []
     today = date.today()
@@ -519,7 +524,7 @@ def _active_djen_manifests(lookback_days: int = ACTIVE_UPDATE_LOOKBACK_DAYS) -> 
 
 def _djen_deadline_manifest_for_date(target_date: str) -> Path:
     year, month, day = target_date.split("-")
-    return ROOT / "data" / "processed" / "djen_deadlines" / year / month / day / "deadline_parser_manifest.json"
+    return DATA_ROOT / "processed" / "djen_deadlines" / year / month / day / "deadline_parser_manifest.json"
 
 
 def _run_djen_deadline_parser(target_date: str) -> dict[str, Any]:
@@ -530,7 +535,7 @@ def _run_djen_deadline_parser(target_date: str) -> dict[str, Any]:
         "--date",
         target_date,
     ]
-    log_dir = ROOT / "logs"
+    log_dir = LOG_ROOT
     log_dir.mkdir(parents=True, exist_ok=True)
     with (
         (log_dir / "djen-deadline-parser.log").open("a", encoding="utf-8") as stdout,
@@ -572,7 +577,7 @@ def _run_djen_collection_unlocked(mode: str = "daily", dry_run: bool = False, re
         command.append("--dry-run")
     if retry_pending:
         command.append("--retry-pending")
-    log_dir = ROOT / "logs"
+    log_dir = LOG_ROOT
     log_dir.mkdir(parents=True, exist_ok=True)
     with (
         (log_dir / "djen-daily.log").open("a", encoding="utf-8") as stdout,
@@ -2298,7 +2303,7 @@ class JustraApp:
         if completed.returncode != 0:
             raise RuntimeError(f"importação Falcão falhou: {completed.stderr[-2000:]}")
         result = json.loads(completed.stdout)
-        _atomic_json_file(ROOT / "data" / "knowledge" / "falcao" / "import_status.json", result)
+        _atomic_json_file(DATA_ROOT / "knowledge" / "falcao" / "import_status.json", result)
         return result
 
     def _save_radar(self) -> None:
@@ -6347,7 +6352,7 @@ class JustraApp:
     def falcao_dashboard(self) -> dict[str, Any]:
         control = falcao_control()
         runtime = load_json_file(FALCAO_RUNTIME_PATH, {})
-        raw_root = ROOT / "data" / "raw" / "falcao"
+        raw_root = DATA_ROOT / "raw" / "falcao"
         raw_root.mkdir(parents=True, exist_ok=True)
         run_dirs = sorted(
             [
@@ -8818,17 +8823,17 @@ class JustraApp:
         return {"ok": True, "controls": self.controls}
 
     def coverage_map(self) -> dict[str, Any]:
-        knowledge_status = load_json_file(ROOT / "data" / "knowledge" / "knowledge_status.json", {})
-        falcao_status = load_json_file(ROOT / "data" / "knowledge" / "falcao" / "import_status.json", {})
+        knowledge_status = load_json_file(DATA_ROOT / "knowledge" / "knowledge_status.json", {})
+        falcao_status = load_json_file(DATA_ROOT / "knowledge" / "falcao" / "import_status.json", {})
         tst_status = knowledge_status.get("tst", {})
         tst_current = tst_status.get("current_site") or tst_status
-        tst_acordaos = tst_status.get("acordaos") or load_json_file(ROOT / "data" / "knowledge" / "tst" / "summary_acordaos.json", {})
+        tst_acordaos = tst_status.get("acordaos") or load_json_file(DATA_ROOT / "knowledge" / "tst" / "summary_acordaos.json", {})
         tst_reported = tst_current.get("reported_totals", {})
         trt2_basis_status = knowledge_status.get("trt2_basis", {})
         trt2_layers = trt2_basis_status.get("by_layer", {})
         trt2_oai_status = knowledge_status.get("trt2_legal_collections") or knowledge_status.get("trt2_oai_legal", {})
         trt2_oai_layers = trt2_oai_status.get("by_layer", {})
-        clt_status = knowledge_status.get("planalto_clt") or load_json_file(ROOT / "data" / "knowledge" / "planalto" / "summary_clt.json", {})
+        clt_status = knowledge_status.get("planalto_clt") or load_json_file(DATA_ROOT / "knowledge" / "planalto" / "summary_clt.json", {})
         counts = {
             "processes": self.one("SELECT COUNT(*) FROM processes"),
             "court_units": self.one("SELECT COUNT(DISTINCT court_unit) FROM processes WHERE court_unit IS NOT NULL AND court_unit <> ''"),
@@ -8857,7 +8862,7 @@ class JustraApp:
         falcao_total = sum(falcao_by_court.values())
         counts["full_text_by_court"] = falcao_by_court
         counts["falcao_full_text"] = falcao_total
-        basis_index = ROOT / "data" / "raw" / "json" / "document_index.json"
+        basis_index = DATA_ROOT / "raw" / "json" / "document_index.json"
         basis_count = 0
         if basis_index.exists():
             try:
@@ -8865,7 +8870,7 @@ class JustraApp:
                 basis_count = len(content) if isinstance(content, list) else len(content.get("documents", []))
             except Exception:  # noqa: BLE001
                 basis_count = 0
-        tst_pdf = ROOT / "data" / "raw" / "pdf" / "tst_sumulas_ojs_precedentes.pdf"
+        tst_pdf = DATA_ROOT / "raw" / "pdf" / "tst_sumulas_ojs_precedentes.pdf"
         source_layers = [
             {"court": "TRT2", "layer": "DataJud - metadados e movimentos", "status": "em coleta", "count": counts["processes"], "storage": "processos.processes, movements, decision_events, subjects, claims", "quality": "boa para volume, assunto e movimento", "next_step": "ampliar janela e graus sem duplicar"},
             {

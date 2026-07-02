@@ -7,8 +7,13 @@ import { fileURLToPath } from "node:url";
 
 const __filename = fileURLToPath(import.meta.url);
 const ROOT = path.resolve(path.dirname(__filename), "..");
-const RUNTIME_NODE_MODULES =
+const DATA_ROOT = path.resolve(process.env.JUSTRA_DATA_DIR || path.join(ROOT, "data"));
+const LOG_ROOT = path.resolve(process.env.JUSTRA_LOG_DIR || path.join(ROOT, "logs"));
+const CODEX_NODE_MODULES =
   "/Users/heitordoamaraljurkovich/.cache/codex-runtimes/codex-primary-runtime/dependencies/node/node_modules";
+const RUNTIME_NODE_MODULES =
+  process.env.JUSTRA_NODE_MODULES ||
+  (fs.existsSync(CODEX_NODE_MODULES) ? CODEX_NODE_MODULES : path.join(ROOT, "node_modules"));
 const require = createRequire(path.join(RUNTIME_NODE_MODULES, "package.json"));
 const { chromium } = require("playwright");
 
@@ -17,8 +22,17 @@ const FRONTEND_URL =
 const API_PATH = "/jurisprudencia-nacional-backend/api/no-auth/pesquisa";
 const CITATION_BASE =
   "https://jurisprudencia.jt.jus.br/jurisprudencia-nacional/citacao";
-const CHROME_PATH =
-  "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome";
+const DEFAULT_CHROME_PATH =
+  process.platform === "darwin"
+    ? "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"
+    : "";
+const CHROME_PATH = process.env.JUSTRA_CHROME_PATH || DEFAULT_CHROME_PATH;
+
+function browserLaunchOptions(headed) {
+  const options = { headless: !headed };
+  if (CHROME_PATH) options.executablePath = CHROME_PATH;
+  return options;
+}
 
 const COLLECTIONS = [
   { id: "acordaos", label: "Acórdãos" },
@@ -573,7 +587,7 @@ async function main() {
       });
     const logPath = path.resolve(
       ROOT,
-      args.logPath || `logs/falcao_week_${args.outputTag}.log`,
+      args.logPath || path.join(LOG_ROOT, `falcao_week_${args.outputTag}.log`),
     );
     fs.mkdirSync(path.dirname(logPath), { recursive: true });
     const logFd = fs.openSync(logPath, "a");
@@ -621,7 +635,7 @@ async function main() {
   const selectedCollections = COLLECTIONS.filter((item) =>
     args.collections.includes(item.id),
   );
-  const outputDir = path.join(ROOT, "data", "raw", "falcao", args.outputTag);
+  const outputDir = path.join(DATA_ROOT, "raw", "falcao", args.outputTag);
   fs.mkdirSync(outputDir, { recursive: true });
   console.log(
     JSON.stringify({
@@ -847,10 +861,7 @@ async function main() {
     saveState();
   }
 
-  const browser = await chromium.launch({
-    executablePath: CHROME_PATH,
-    headless: !args.headed,
-  });
+  const browser = await chromium.launch(browserLaunchOptions(args.headed));
   const context = await browser.newContext({
     locale: "pt-BR",
     viewport: { width: 1440, height: 1000 },

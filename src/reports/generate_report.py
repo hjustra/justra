@@ -8,6 +8,10 @@ import pandas as pd
 from jurimetrics.by_claim import summarize_by_claim
 from jurimetrics.by_court_unit import summarize_by_court_unit
 from jurimetrics.by_judge import summarize_by_judge
+try:
+    from src.justra_paths import DATA_ROOT
+except ModuleNotFoundError:  # scripts antigos adicionam ROOT/src ao sys.path
+    from justra_paths import DATA_ROOT
 
 
 def pct(value: float) -> str:
@@ -30,8 +34,8 @@ def generate_report(
     claims_path: Path | None = None,
     output_path: Path | None = None,
 ) -> Path:
-    decisions_path = decisions_path or project_root / "data/processed/decisions.csv"
-    claims_path = claims_path or project_root / "data/processed/claims.csv"
+    decisions_path = decisions_path or DATA_ROOT / "processed" / "decisions.csv"
+    claims_path = claims_path or DATA_ROOT / "processed" / "claims.csv"
     output_path = output_path or project_root / "reports/trt2_v0_report.html"
 
     decisions = pd.read_csv(decisions_path) if decisions_path.exists() else pd.DataFrame()

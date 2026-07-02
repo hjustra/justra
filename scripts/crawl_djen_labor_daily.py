@@ -17,7 +17,8 @@ from zoneinfo import ZoneInfo
 import requests
 
 ROOT = Path(__file__).resolve().parents[1]
-DEFAULT_OUT_DIR = ROOT / "data"
+from justra_runtime_paths import DATA_ROOT, LOG_ROOT  # noqa: E402
+DEFAULT_OUT_DIR = DATA_ROOT
 TRIBUNAL_URL = "https://comunicaapi.pje.jus.br/api/v1/comunicacao/tribunal"
 CADERNO_URL = "https://comunicaapi.pje.jus.br/api/v1/caderno/{court}/{date}/{medium}"
 TZ = ZoneInfo("America/Sao_Paulo")
@@ -487,7 +488,7 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     parser.add_argument("--date", default="", help="Data alvo em YYYY-MM-DD. Padrao: data publicada no Comunica.")
     parser.add_argument("--courts", default="", help="Lista separada por virgula. Ex.: TST,TRT2")
     parser.add_argument("--mediums", default="D,E", help="Meios separados por virgula. Padrao: D,E")
-    parser.add_argument("--out-dir", default=str(DEFAULT_OUT_DIR), help="Diretorio base de saida. Padrao: pesquisa/data")
+    parser.add_argument("--out-dir", default=str(DEFAULT_OUT_DIR), help="Diretorio base de saida. Padrao: JUSTRA_DATA_DIR ou ./data")
     parser.add_argument("--retry-pending", action="store_true", help="Processa apenas cadernos pendentes da data alvo.")
     parser.add_argument("--dry-run", action="store_true", help="Consulta metadados sem baixar ZIPs.")
     parser.add_argument("--sleep", type=float, default=0.25, help="Pausa entre cadernos, em segundos.")

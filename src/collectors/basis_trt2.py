@@ -15,6 +15,11 @@ from bs4 import BeautifulSoup
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
 
+try:
+    from src.justra_paths import DATA_ROOT
+except ModuleNotFoundError:  # scripts antigos adicionam ROOT/src ao sys.path
+    from justra_paths import DATA_ROOT
+
 
 BASIS_BASE_URL = "https://basis.trt2.jus.br"
 DEFAULT_QUERY = "Jurisprudência trabalhista"
@@ -465,6 +470,18 @@ def save_json_sidecar(record: BasisDocument, output_path: Path) -> None:
     )
 
 
+def resolve_stored_path(project_root: Path, value: str) -> Path:
+    path = Path(value)
+    return path if path.is_absolute() else project_root / path
+
+
+def store_path(path: Path, project_root: Path) -> str:
+    try:
+        return str(path.relative_to(project_root))
+    except ValueError:
+        return str(path)
+
+
 def load_manifest(manifest_path: Path) -> dict[str, Any]:
     if not manifest_path.exists():
         return {"documents": {}, "pdf_sha256": {}}
@@ -490,8 +507,8 @@ def has_downloaded_document(record: BasisDocument, manifest: dict[str, Any], pro
 
     html_rel = manifest_record.get("raw_html_path") or ""
     pdf_rel = manifest_record.get("raw_pdf_path") or ""
-    html_ok = bool(html_rel and (project_root / html_rel).exists())
-    pdf_ok = not record.pdf_url or bool(pdf_rel and (project_root / pdf_rel).exists())
+    html_ok = bool(html_rel and resolve_stored_path(project_root, html_rel).exists())
+    pdf_ok = not record.pdf_url or bool(pdf_rel and resolve_stored_path(project_root, pdf_rel).exists())
     if html_ok and pdf_ok:
         record.raw_html_path = html_rel
         record.raw_pdf_path = pdf_rel
@@ -506,9 +523,9 @@ def download_documents(
     force: bool = False,
 ) -> list[BasisDocument]:
     session = make_session()
-    html_dir = project_root / "data/raw/html"
-    pdf_dir = project_root / "data/raw/pdf"
-    json_dir = project_root / "data/raw/json"
+    html_dir = DATA_ROOT / "raw" / "html"
+    pdf_dir = DATA_ROOT / "raw" / "pdf"
+    json_dir = DATA_ROOT / "raw" / "json"
     html_dir.mkdir(parents=True, exist_ok=True)
     pdf_dir.mkdir(parents=True, exist_ok=True)
     json_dir.mkdir(parents=True, exist_ok=True)
@@ -533,7 +550,7 @@ def download_documents(
             except requests.RequestException as exc:
                 record.metadata["html_download_error"] = str(exc)
         if html_path.exists():
-            record.raw_html_path = str(html_path.relative_to(project_root))
+            record.raw_html_path = store_path(html_path, project_root)
 
         if record.pdf_url:
             pdf_name = re.sub(r"[^\w.-]+", "_", Path(record.pdf_url.split("?")[0]).name)
@@ -544,7 +561,7 @@ def download_documents(
                 except requests.RequestException as exc:
                     record.metadata["pdf_download_error"] = str(exc)
             if pdf_path.exists():
-                record.raw_pdf_path = str(pdf_path.relative_to(project_root))
+                record.raw_pdf_path = store_path(pdf_path, project_root)
                 pdf_hash = sha256_file(pdf_path)
                 duplicate_pdf = manifest["pdf_sha256"].get(pdf_hash)
                 if duplicate_pdf and duplicate_pdf != record.raw_pdf_path:
@@ -580,7 +597,7 @@ def collect_many(
     download: bool,
     force: bool,
 ) -> list[BasisDocument]:
-    index_path = project_root / "data/raw/json/document_index.json"
+    index_path = DATA_ROOT / "raw" / "json" / "document_index.json"
     existing = load_index(index_path)
     all_records = existing[:]
 

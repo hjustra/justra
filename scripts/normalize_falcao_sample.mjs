@@ -4,10 +4,11 @@ import { fileURLToPath } from "node:url";
 
 const __filename = fileURLToPath(import.meta.url);
 const ROOT = path.resolve(path.dirname(__filename), "..");
+const DATA_ROOT = path.resolve(process.env.JUSTRA_DATA_DIR || path.join(ROOT, "data"));
 const filePath = path.resolve(
-  ROOT,
+  process.argv[2] ? ROOT : DATA_ROOT,
   process.argv[2] ||
-    "data/samples/falcao/sample_1000_documents.jsonl",
+    "samples/falcao/sample_1000_documents.jsonl",
 );
 const citationBase =
   "https://jurisprudencia.jt.jus.br/jurisprudencia-nacional/citacao";

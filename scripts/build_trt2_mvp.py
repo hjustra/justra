@@ -17,6 +17,7 @@ import requests
 from dotenv import load_dotenv
 
 ROOT = Path(__file__).resolve().parents[1]
+from justra_runtime_paths import DATA_ROOT, LOG_ROOT  # noqa: E402
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
@@ -25,7 +26,7 @@ from src.collectors.pje_trt2 import PJE_TRT2_BASE_URL, format_cnj_number, only_d
 from src.classifiers.claim_classifier import classify_claims
 
 
-DEFAULT_OUTPUT_DIR = ROOT / "data" / "mvp" / "trt2"
+DEFAULT_OUTPUT_DIR = DATA_ROOT / "mvp" / "trt2"
 DEFAULT_REPORT_PATH = ROOT / "reports" / "trt2_mvp_report.html"
 
 SOURCE_FIELDS = [

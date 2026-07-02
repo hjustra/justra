@@ -35,6 +35,7 @@ O merge para `staging` deve ser feito por pull request no GitHub. Quando `stagin
 - Deploy de producao: acompanha a branch `main`.
 - Dados, bancos locais, logs, `.env` e arquivos gerados nao entram no Git.
 - Segredos de cada ambiente ficam fora do repositorio, em variaveis do servidor ou em secrets do GitHub/Azure.
+- Em servidor, use `JUSTRA_DATA_DIR=/mnt/justra-data` e `JUSTRA_LOG_DIR=/mnt/justra-logs` para separar dados/logs do checkout Git.
 
 ## Proximo bloco de infraestrutura
 

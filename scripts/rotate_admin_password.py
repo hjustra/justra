@@ -10,7 +10,8 @@ from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[1]
-USERS_PATH = ROOT / "data" / "app" / "users.json"
+from justra_runtime_paths import DATA_ROOT, LOG_ROOT  # noqa: E402
+USERS_PATH = DATA_ROOT / "app" / "users.json"
 KEYCHAIN_SERVICE = "com.justra.admin"
 
 

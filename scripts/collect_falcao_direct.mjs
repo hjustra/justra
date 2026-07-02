@@ -6,8 +6,12 @@ import { fileURLToPath } from "node:url";
 
 const __filename = fileURLToPath(import.meta.url);
 const ROOT = path.resolve(path.dirname(__filename), "..");
-const RUNTIME_NODE_MODULES =
+const DATA_ROOT = path.resolve(process.env.JUSTRA_DATA_DIR || path.join(ROOT, "data"));
+const CODEX_NODE_MODULES =
   "/Users/heitordoamaraljurkovich/.cache/codex-runtimes/codex-primary-runtime/dependencies/node/node_modules";
+const RUNTIME_NODE_MODULES =
+  process.env.JUSTRA_NODE_MODULES ||
+  (fs.existsSync(CODEX_NODE_MODULES) ? CODEX_NODE_MODULES : path.join(ROOT, "node_modules"));
 const require = createRequire(path.join(RUNTIME_NODE_MODULES, "package.json"));
 const { chromium } = require("playwright");
 
@@ -17,10 +21,19 @@ const API_ORIGIN = "https://jurisprudencia.jt.jus.br";
 const API_PATH = "/jurisprudencia-nacional-backend/api/no-auth/pesquisa";
 const CITATION_BASE =
   "https://jurisprudencia.jt.jus.br/jurisprudencia-nacional/citacao";
-const CHROME_PATH =
-  "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome";
+const DEFAULT_CHROME_PATH =
+  process.platform === "darwin"
+    ? "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"
+    : "";
+const CHROME_PATH = process.env.JUSTRA_CHROME_PATH || DEFAULT_CHROME_PATH;
 const MAX_ANONYMOUS_DOCUMENTS = 200;
 const REQUEST_TIMEOUT_MS = 90_000;
+
+function browserLaunchOptions(headed, extra = {}) {
+  const options = { ...extra, headless: !headed };
+  if (CHROME_PATH) options.executablePath = CHROME_PATH;
+  return options;
+}
 
 const COLLECTIONS = [
   { id: "acordaos", label: "Acórdãos", idField: "idDocumentoAcordao" },
@@ -268,7 +281,7 @@ async function main() {
   const selectedCollections = COLLECTIONS.filter((item) =>
     args.collections.includes(item.id),
   );
-  const outputDir = path.join(ROOT, "data", "raw", "falcao", args.outputTag);
+  const outputDir = path.join(DATA_ROOT, "raw", "falcao", args.outputTag);
   fs.mkdirSync(outputDir, { recursive: true });
   const documentsPath = path.join(outputDir, "documents.jsonl");
   const keysPath = path.join(outputDir, "document_keys.txt");
@@ -765,11 +778,7 @@ async function main() {
 
   let browser;
   try {
-    browser = await chromium.launch({
-      executablePath: CHROME_PATH,
-      headless: !args.headed,
-      timeout: 90_000,
-    });
+    browser = await chromium.launch(browserLaunchOptions(args.headed, { timeout: 90_000 }));
     const chromeVersion = browser.version();
     const context = await browser.newContext({
       locale: "pt-BR",

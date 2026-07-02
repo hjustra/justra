@@ -14,6 +14,7 @@ import sys
 
 
 ROOT = Path(__file__).resolve().parents[1]
+from justra_runtime_paths import DATA_ROOT, LOG_ROOT  # noqa: E402
 
 
 def utc_now() -> dt.datetime:
@@ -96,7 +97,7 @@ def main() -> int:
     parser.add_argument("collector_args", nargs=argparse.REMAINDER)
     args = parser.parse_args()
 
-    output_dir = ROOT / "data" / "raw" / "falcao" / args.output_tag
+    output_dir = DATA_ROOT / "raw" / "falcao" / args.output_tag
     output_dir.mkdir(parents=True, exist_ok=True)
     scheduler_status = output_dir / "scheduler_status.json"
     lock_path = output_dir / "scheduler.lock"
@@ -128,7 +129,7 @@ def main() -> int:
 
     requests_path = output_dir / "requests.jsonl"
     checkpoint_path = output_dir / "checkpoint.json"
-    request_histories = list((ROOT / "data" / "raw" / "falcao").glob("**/requests.jsonl"))
+    request_histories = list((DATA_ROOT / "raw" / "falcao").glob("**/requests.jsonl"))
     blocked_at = last_block_at(request_histories)
     control_blocked_at = parse_timestamp(control.get("last_block_at"))
     if control_blocked_at and (blocked_at is None or control_blocked_at > blocked_at):

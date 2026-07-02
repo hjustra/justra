@@ -9,10 +9,11 @@ import duckdb
 
 
 ROOT = Path(__file__).resolve().parents[1]
-DEFAULT_ACTIVE = ROOT / "data" / "mvp" / "trt2" / "trt2_mvp.duckdb"
-DEFAULT_CANDIDATE = ROOT / "data" / "mvp" / "trt2" / "trt2_mvp_candidate.duckdb"
-DEFAULT_STATUS = ROOT / "data" / "knowledge" / "falcao" / "candidate_import_status.json"
-FINAL_STATUS = ROOT / "data" / "knowledge" / "falcao" / "import_status.json"
+from justra_runtime_paths import DATA_ROOT, LOG_ROOT  # noqa: E402
+DEFAULT_ACTIVE = DATA_ROOT / "mvp" / "trt2" / "trt2_mvp.duckdb"
+DEFAULT_CANDIDATE = DATA_ROOT / "mvp" / "trt2" / "trt2_mvp_candidate.duckdb"
+DEFAULT_STATUS = DATA_ROOT / "knowledge" / "falcao" / "candidate_import_status.json"
+FINAL_STATUS = DATA_ROOT / "knowledge" / "falcao" / "import_status.json"
 
 
 def inspect_database(path: Path) -> dict[str, int]:

@@ -7,8 +7,12 @@ import { fileURLToPath } from "node:url";
 
 const __filename = fileURLToPath(import.meta.url);
 const ROOT = path.resolve(path.dirname(__filename), "..");
-const RUNTIME_NODE_MODULES =
+const DATA_ROOT = path.resolve(process.env.JUSTRA_DATA_DIR || path.join(ROOT, "data"));
+const CODEX_NODE_MODULES =
   "/Users/heitordoamaraljurkovich/.cache/codex-runtimes/codex-primary-runtime/dependencies/node/node_modules";
+const RUNTIME_NODE_MODULES =
+  process.env.JUSTRA_NODE_MODULES ||
+  (fs.existsSync(CODEX_NODE_MODULES) ? CODEX_NODE_MODULES : path.join(ROOT, "node_modules"));
 const require = createRequire(path.join(RUNTIME_NODE_MODULES, "package.json"));
 const { chromium } = require("playwright");
 
@@ -18,9 +22,18 @@ const API_URL =
   "https://jurisprudencia.jt.jus.br/jurisprudencia-nacional-backend/api/no-auth/pesquisa";
 const CITATION_BASE =
   "https://jurisprudencia.jt.jus.br/jurisprudencia-nacional/citacao";
-const CHROME_PATH =
-  "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome";
-const OUTPUT_DIR = path.join(ROOT, "data", "samples", "falcao");
+const DEFAULT_CHROME_PATH =
+  process.platform === "darwin"
+    ? "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"
+    : "";
+const CHROME_PATH = process.env.JUSTRA_CHROME_PATH || DEFAULT_CHROME_PATH;
+const OUTPUT_DIR = path.join(DATA_ROOT, "samples", "falcao");
+
+function browserLaunchOptions(headed) {
+  const options = { headless: !headed };
+  if (CHROME_PATH) options.executablePath = CHROME_PATH;
+  return options;
+}
 
 const COLLECTIONS = [
   { id: "acordaos", label: "Acórdãos", expectedTotal: 11_756_525 },
@@ -365,10 +378,7 @@ async function main() {
     fs.rmSync(filePath, { force: true });
   }
 
-  const browser = await chromium.launch({
-    executablePath: CHROME_PATH,
-    headless: !args.headed,
-  });
+  const browser = await chromium.launch(browserLaunchOptions(args.headed));
   const context = await browser.newContext({
     locale: "pt-BR",
     viewport: { width: 1440, height: 1000 },

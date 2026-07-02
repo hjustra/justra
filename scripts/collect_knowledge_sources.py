@@ -18,6 +18,7 @@ import requests
 from bs4 import BeautifulSoup
 
 ROOT = Path(__file__).resolve().parents[1]
+from justra_runtime_paths import DATA_ROOT, LOG_ROOT  # noqa: E402
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT / "src"))
 
@@ -37,8 +38,8 @@ TST_JURIS_CONFIG_URL = f"{TST_JURIS_URL}/config.json"
 TST_DEFAULT_BACKEND_URL = "https://jurisprudencia-backend2.tst.jus.br"
 TST_CONSULTA_ACORDAO_URL = "https://consultadocumento.tst.jus.br/consultaDocumento/acordao.do"
 PLANALTO_CLT_URL = "https://www.planalto.gov.br/ccivil_03/decreto-lei/Del5452.htm"
-TST_PDF_PATH = ROOT / "data" / "raw" / "pdf" / "tst_sumulas_ojs_precedentes.pdf"
-KNOWLEDGE_DIR = ROOT / "data" / "knowledge"
+TST_PDF_PATH = DATA_ROOT / "raw" / "pdf" / "tst_sumulas_ojs_precedentes.pdf"
+KNOWLEDGE_DIR = DATA_ROOT / "knowledge"
 TST_DIR = KNOWLEDGE_DIR / "tst"
 TRT2_DIR = KNOWLEDGE_DIR / "trt2_basis"
 PLANALTO_DIR = KNOWLEDGE_DIR / "planalto"
@@ -587,7 +588,7 @@ def collect_tst_acordaos_recentes(limit: int, page_size: int, sleep_seconds: flo
     jsonl_path = TST_DIR / "tst_acordaos_recentes.jsonl"
     csv_path = TST_DIR / "tst_acordaos_recentes.csv"
     checkpoint_path = TST_DIR / "tst_acordaos_checkpoint.json"
-    raw_html_dir = ROOT / "data" / "raw" / "html" / "tst_acordaos"
+    raw_html_dir = DATA_ROOT / "raw" / "html" / "tst_acordaos"
     if reset:
         jsonl_path.unlink(missing_ok=True)
         csv_path.unlink(missing_ok=True)
@@ -687,7 +688,7 @@ def collect_tst_acordaos_recentes(limit: int, page_size: int, sleep_seconds: flo
 
 def collect_planalto_clt() -> dict[str, Any]:
     ensure_dir(PLANALTO_DIR)
-    raw_path = ROOT / "data" / "raw" / "html" / "planalto_clt_del5452.html"
+    raw_path = DATA_ROOT / "raw" / "html" / "planalto_clt_del5452.html"
     session = requests.Session()
     session.headers.update({"User-Agent": USER_AGENT})
     response = session.get(PLANALTO_CLT_URL, timeout=90)

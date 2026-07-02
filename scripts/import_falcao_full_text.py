@@ -15,9 +15,10 @@ import duckdb
 
 
 ROOT = Path(__file__).resolve().parents[1]
-DEFAULT_DB = ROOT / "data" / "mvp" / "trt2" / "trt2_mvp.duckdb"
-DEFAULT_INPUT = ROOT / "data" / "raw" / "falcao" / "2026-06-11_2026-06-18" / "documents.jsonl"
-DEFAULT_STATUS = ROOT / "data" / "knowledge" / "falcao" / "import_status.json"
+from justra_runtime_paths import DATA_ROOT, LOG_ROOT  # noqa: E402
+DEFAULT_DB = DATA_ROOT / "mvp" / "trt2" / "trt2_mvp.duckdb"
+DEFAULT_INPUT = DATA_ROOT / "raw" / "falcao" / "2026-06-11_2026-06-18" / "documents.jsonl"
+DEFAULT_STATUS = DATA_ROOT / "knowledge" / "falcao" / "import_status.json"
 SOURCE_PROVIDER = "falcao"
 
 STYLE_RE = re.compile(r"<(style|script)\b[^>]*>.*?</\1>", re.IGNORECASE | re.DOTALL)

@@ -17,7 +17,8 @@ import duckdb
 from dotenv import load_dotenv
 
 ROOT = Path(__file__).resolve().parents[1]
-DEFAULT_DB = ROOT / "data" / "mvp" / "trt2" / "trt2_mvp.duckdb"
+from justra_runtime_paths import DATA_ROOT, LOG_ROOT  # noqa: E402
+DEFAULT_DB = DATA_ROOT / "mvp" / "trt2" / "trt2_mvp.duckdb"
 
 
 CLAIM_ALIASES = {

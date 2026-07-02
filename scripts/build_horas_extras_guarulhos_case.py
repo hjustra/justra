@@ -19,6 +19,7 @@ import requests
 from dotenv import load_dotenv
 
 ROOT = Path(__file__).resolve().parents[1]
+from justra_runtime_paths import DATA_ROOT, LOG_ROOT  # noqa: E402
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
@@ -831,7 +832,7 @@ def main() -> None:
     parser.add_argument("--pje-basic-limit", type=int, default=25)
     parser.add_argument(
         "--output-dir",
-        default=str(ROOT / "data" / "cases" / "guarulhos_horas_extras"),
+        default=str(DATA_ROOT / "cases" / "guarulhos_horas_extras"),
     )
     args = parser.parse_args()
 
@@ -874,7 +875,7 @@ def main() -> None:
         pje_payload = collect_pje_basic(rows, args.pje_basic_limit, args.sleep)
         write_json(pje_path, pje_payload)
 
-    tst_pdf_path = ROOT / "data" / "raw" / "pdf" / "tst_sumulas_ojs_precedentes.pdf"
+    tst_pdf_path = DATA_ROOT / "raw" / "pdf" / "tst_sumulas_ojs_precedentes.pdf"
     tst_download = download_file(TST_JURISPRUDENCE_PDF_URL, tst_pdf_path, args.sleep)
     write_json(raw_dir / "tst_pdf_download.json", tst_download)
 

@@ -16,7 +16,8 @@ from typing import Any, Iterable
 from zoneinfo import ZoneInfo
 
 ROOT = Path(__file__).resolve().parents[1]
-DEFAULT_DATA_DIR = ROOT / "data"
+from justra_runtime_paths import DATA_ROOT, LOG_ROOT  # noqa: E402
+DEFAULT_DATA_DIR = DATA_ROOT
 TZ = ZoneInfo("America/Sao_Paulo")
 PARSER_VERSION = "0.1"
 CNJ_DIGITS_RE = re.compile(r"\D+")

@@ -45,6 +45,15 @@ scripts/
 reports/
 ```
 
+Por padrao, `data/` e `logs/` ficam dentro do checkout local. Em servidor, defina `JUSTRA_DATA_DIR` e `JUSTRA_LOG_DIR` para manter dados e logs fora do repositorio:
+
+```text
+JUSTRA_DATA_DIR=/mnt/justra-data
+JUSTRA_LOG_DIR=/mnt/justra-logs
+```
+
+Os coletores Falcao tambem aceitam `JUSTRA_NODE_BIN`, `JUSTRA_NODE_MODULES` e `JUSTRA_CHROME_PATH` quando rodarem em servidor.
+
 ## Setup
 
 ```bash

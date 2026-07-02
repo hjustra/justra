@@ -16,6 +16,7 @@ import duckdb
 import requests
 
 ROOT = Path(__file__).resolve().parents[1]
+from justra_runtime_paths import DATA_ROOT, LOG_ROOT  # noqa: E402
 SRC_DIR = ROOT / "src"
 if str(SRC_DIR) not in sys.path:
     sys.path.insert(0, str(SRC_DIR))
@@ -27,13 +28,13 @@ from collectors.basis_trt2 import (  # noqa: E402
     stable_id,
 )
 
-TRT2_BASIS_DIR = ROOT / "data" / "knowledge" / "trt2_basis"
-RAW_JSON_DIR = ROOT / "data" / "raw" / "json"
+TRT2_BASIS_DIR = DATA_ROOT / "knowledge" / "trt2_basis"
+RAW_JSON_DIR = DATA_ROOT / "raw" / "json"
 DEFAULT_MANIFEST = RAW_JSON_DIR / "trt2_basis_pdf_downloads.jsonl"
 DEFAULT_SUMMARY = RAW_JSON_DIR / "trt2_basis_pdf_summary.json"
-DEFAULT_OUTPUT_DIR = ROOT / "data" / "raw" / "pdf" / "trt2_basis"
-LEGACY_PDF_DIR = ROOT / "data" / "raw" / "pdf"
-DEFAULT_DUCKDB = ROOT / "data" / "knowledge" / "knowledge.duckdb"
+DEFAULT_OUTPUT_DIR = DATA_ROOT / "raw" / "pdf" / "trt2_basis"
+LEGACY_PDF_DIR = DATA_ROOT / "raw" / "pdf"
+DEFAULT_DUCKDB = DATA_ROOT / "knowledge" / "knowledge.duckdb"
 
 SOURCE_FILES = {
     "all": TRT2_BASIS_DIR / "trt2_basis_items.jsonl",

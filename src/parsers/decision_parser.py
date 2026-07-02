@@ -9,6 +9,15 @@ import pandas as pd
 
 from parsers.html_parser import extract_html_file_text
 from parsers.pdf_parser import extract_pdf_text
+try:
+    from src.justra_paths import DATA_ROOT
+except ModuleNotFoundError:  # scripts antigos adicionam ROOT/src ao sys.path
+    from justra_paths import DATA_ROOT
+
+
+def resolve_stored_path(project_root: Path, value: str) -> Path:
+    path = Path(value)
+    return path if path.is_absolute() else project_root / path
 
 
 PROCESS_RE = re.compile(r"\b\d{7}-\d{2}\.\d{4}\.\d\.\d{2}\.\d{4}\b")
@@ -71,12 +80,12 @@ def load_document_text(project_root: Path, item: dict[str, Any]) -> tuple[str, s
     html_rel = item.get("raw_html_path") or ""
 
     if pdf_rel:
-        pdf_text = extract_pdf_text(project_root / pdf_rel)
+        pdf_text = extract_pdf_text(resolve_stored_path(project_root, pdf_rel))
         if pdf_text:
             return pdf_text, "pdf"
 
     if html_rel:
-        html_text = extract_html_file_text(project_root / html_rel)
+        html_text = extract_html_file_text(resolve_stored_path(project_root, html_rel))
         if html_text:
             return html_text, "html"
 
@@ -124,8 +133,8 @@ def parse_document_index(
     index_path: Path | None = None,
     output_path: Path | None = None,
 ) -> pd.DataFrame:
-    index_path = index_path or project_root / "data/raw/json/document_index.json"
-    output_path = output_path or project_root / "data/processed/decisions.csv"
+    index_path = index_path or DATA_ROOT / "raw" / "json" / "document_index.json"
+    output_path = output_path or DATA_ROOT / "processed" / "decisions.csv"
     records = [parse_record(project_root, item) for item in read_index(index_path)]
     df = pd.DataFrame(records)
     output_path.parent.mkdir(parents=True, exist_ok=True)

@@ -12,8 +12,9 @@ from typing import Any, Iterable
 import duckdb
 
 ROOT = Path(__file__).resolve().parents[1]
-DEFAULT_DB = ROOT / "data" / "mvp" / "trt2" / "trt2_mvp.duckdb"
-DEFAULT_INPUT = ROOT / "data" / "mvp" / "trt2" / "full_text_inbox"
+from justra_runtime_paths import DATA_ROOT, LOG_ROOT  # noqa: E402
+DEFAULT_DB = DATA_ROOT / "mvp" / "trt2" / "trt2_mvp.duckdb"
+DEFAULT_INPUT = DATA_ROOT / "mvp" / "trt2" / "full_text_inbox"
 
 
 FIELDS = [
