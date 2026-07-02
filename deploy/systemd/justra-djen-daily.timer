@@ -2,9 +2,11 @@
 Description=Run Justra DJEN daily collector
 
 [Timer]
+OnCalendar=*-*-* 08:00:00 America/Sao_Paulo
 OnCalendar=*-*-* 12:00:00 America/Sao_Paulo
+OnCalendar=*-*-* 18:00:00 America/Sao_Paulo
 Persistent=true
-RandomizedDelaySec=15m
+RandomizedDelaySec=10m
 
 [Install]
 WantedBy=timers.target

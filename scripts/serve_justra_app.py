@@ -452,6 +452,16 @@ def _djen_manifest_for_date(target_date: str) -> tuple[Path | None, dict[str, An
     return path, load_json_file(path, {})
 
 
+def _djen_pdf_poll_manifest_for_date(target_date: str) -> tuple[Path | None, dict[str, Any]]:
+    if not re.fullmatch(r"\d{4}-\d{2}-\d{2}", str(target_date or "")):
+        return None, {}
+    year, month, day = target_date.split("-")
+    path = DATA_ROOT / "processed" / "dejt_pdf_poll" / year / month / day / "poll_manifest.json"
+    if not path.exists():
+        return None, {}
+    return path, load_json_file(path, {})
+
+
 def _latest_deadline_manifest() -> tuple[Path | None, dict[str, Any]]:
     processed_root = DATA_ROOT / "processed" / "djen_deadlines"
     if not processed_root.exists():
@@ -571,14 +581,16 @@ def _run_djen_collection_unlocked(mode: str = "daily", dry_run: bool = False, re
     command = [
         sys.executable,
         "-u",
-        str(ROOT / "scripts" / "crawl_djen_labor_daily.py"),
-        "--date",
+        str(ROOT / "scripts" / "poll_dejt_pdf_cadernos.py"),
+        "--run-date",
         target_date,
+        "--mediums",
+        "J",
     ]
     if dry_run:
         command.append("--dry-run")
     if retry_pending:
-        command.append("--retry-pending")
+        command.append("--force")
     log_dir = LOG_ROOT
     log_dir.mkdir(parents=True, exist_ok=True)
     with (
@@ -604,34 +616,32 @@ def _run_djen_collection_unlocked(mode: str = "daily", dry_run: bool = False, re
             }
         )
         returncode = process.wait()
-    manifest_path, manifest = _djen_manifest_for_date(target_date)
-    deadline_parser: dict[str, Any] = {}
-    if returncode == 0 and not dry_run and manifest.get("target_date"):
-        update_djen_runtime(
-            {
-                "state": "extracting_deadlines",
-                "pid": None,
-                "mode": mode,
-                "dry_run": dry_run,
-                "retry_pending": retry_pending,
-                "target_date": manifest.get("target_date") or "",
-                "manifest_path": str(manifest_path) if manifest_path else "",
-            }
-        )
-        deadline_parser = _run_djen_deadline_parser(str(manifest.get("target_date")))
+    poll_manifest_path, poll_manifest = _djen_pdf_poll_manifest_for_date(target_date)
+    imported_dates = poll_manifest.get("imported_dates") or []
+    deadline_parser = poll_manifest.get("deadline_parser") or []
+    latest_imported_date = str(imported_dates[-1]) if imported_dates else target_date
+    djen_manifest_path, djen_manifest = _djen_manifest_for_date(latest_imported_date)
+    deadline_ok = all(int(item.get("returncode") or 0) == 0 for item in deadline_parser) if isinstance(deadline_parser, list) else True
     update_djen_runtime(
         {
-            "state": "finished" if returncode == 0 and int(deadline_parser.get("returncode") or 0) == 0 else "finished_with_errors",
+            "state": "finished" if returncode == 0 and deadline_ok else "finished_with_errors",
             "pid": None,
             "finished_at": now_iso(),
             "returncode": returncode,
             "mode": mode,
             "dry_run": dry_run,
             "retry_pending": retry_pending,
-            "target_date": manifest.get("target_date") or target_date,
-            "manifest_path": str(manifest_path) if manifest_path else "",
-            "total_publications": int(manifest.get("total_publications") or 0),
-            "total_pending": int(manifest.get("total_cadernos_pending") or 0),
+            "target_date": latest_imported_date,
+            "manifest_path": str(djen_manifest_path or poll_manifest_path or ""),
+            "pdf_poll_manifest_path": str(poll_manifest_path or ""),
+            "pdf_poll": {
+                "status_counts": poll_manifest.get("status_counts") or {},
+                "total_sources": int(poll_manifest.get("total_sources") or 0),
+                "imported_dates": imported_dates,
+                "events_imported": int(poll_manifest.get("events_imported") or 0),
+            },
+            "total_publications": int(djen_manifest.get("total_publications") or poll_manifest.get("events_imported") or 0),
+            "total_pending": 0,
             "deadline_parser": deadline_parser,
         }
     )
@@ -6747,56 +6757,83 @@ class JustraApp:
         runtime_state = str(runtime.get("state") or "")
         target_date = runtime_target if runtime_state in {"running", "extracting_deadlines"} and runtime_target else today_target
         manifest_path, manifest = _djen_manifest_for_date(target_date)
+        poll_manifest_path, poll_manifest = _djen_pdf_poll_manifest_for_date(today_target)
         manifest_dir = manifest_path.parent if manifest_path else None
         pending = load_json_file(manifest_dir / "pending_cadernos.json", []) if manifest_dir else []
         request_rows = tail_jsonl(manifest_dir / "requests.jsonl", 80) if manifest_dir else []
         cadernos: list[dict[str, Any]] = []
-        for court in manifest.get("courts") or []:
-            for medium, info in (court.get("meios") or {}).items():
+        if poll_manifest.get("sources"):
+            for source in poll_manifest.get("sources") or []:
                 cadernos.append(
                     {
-                        "court": court.get("sigla"),
-                        "medium": medium,
-                        "published_date": court.get("published_date"),
-                        "status": info.get("status") or info.get("state") or "pendente",
-                        "version": info.get("versao"),
-                        "total": int(info.get("total_comunicacoes") or 0),
-                        "pages": int(info.get("numero_paginas") or 0),
-                        "downloaded": bool(info.get("downloaded")),
-                        "normalized_count": int(info.get("normalized_count") or 0),
-                        "hash": info.get("hash") or "",
+                        "court": source.get("court"),
+                        "medium": source.get("medium"),
+                        "published_date": source.get("issue_date") or "",
+                        "status": source.get("status") or "pendente",
+                        "version": "",
+                        "total": int(source.get("event_count") or 0),
+                        "pages": 0,
+                        "downloaded": source.get("status") in {"imported", "baseline_old", "dry_run_importable"},
+                        "normalized_count": int(source.get("event_count") or 0),
+                        "hash": (source.get("download") or {}).get("sha256") or source.get("sha256") or "",
                     }
                 )
+        else:
+            for court in manifest.get("courts") or []:
+                for medium, info in (court.get("meios") or {}).items():
+                    cadernos.append(
+                        {
+                            "court": court.get("sigla"),
+                            "medium": medium,
+                            "published_date": court.get("published_date"),
+                            "status": info.get("status") or info.get("state") or "pendente",
+                            "version": info.get("versao"),
+                            "total": int(info.get("total_comunicacoes") or 0),
+                            "pages": int(info.get("numero_paginas") or 0),
+                            "downloaded": bool(info.get("downloaded")),
+                            "normalized_count": int(info.get("normalized_count") or 0),
+                            "hash": info.get("hash") or "",
+                        }
+                    )
         status_counts = Counter(str(row.get("status") or "n/d") for row in request_rows)
         schedule = str(control.get("schedule") or "12:00")
-        next_run_at = next_local_run_at(schedule)
+        now = datetime.now(APP_TZ)
+        next_pdf_runs = [
+            now.replace(hour=hour, minute=0, second=0, microsecond=0)
+            for hour in (8, 12, 18)
+        ]
+        next_pdf_runs.extend(run + timedelta(days=1) for run in list(next_pdf_runs))
+        next_run_at = min(run for run in next_pdf_runs if run > now).isoformat(timespec="seconds")
+        poll_counts = poll_manifest.get("status_counts") or {}
+        if poll_counts:
+            status_counts.update({f"pdf:{key}": value for key, value in poll_counts.items()})
         return {
             "control": control,
             "runtime": runtime,
             "manifest": manifest,
             "summary": {
-                "target_date": manifest.get("target_date") or target_date,
-                "courts": int(manifest.get("total_courts") or 0),
-                "expected": int(manifest.get("total_cadernos_expected") or 0),
-                "processed": int(manifest.get("total_cadernos_processed") or 0),
-                "empty": int(manifest.get("total_cadernos_empty") or 0),
-                "pending": int(manifest.get("total_cadernos_pending") or 0),
-                "publications": int(manifest.get("total_publications") or 0),
-                "errors": len(manifest.get("errors") or []),
+                "target_date": poll_manifest.get("run_date") or manifest.get("target_date") or target_date,
+                "courts": int(poll_manifest.get("total_sources") or manifest.get("total_courts") or 0),
+                "expected": int(poll_manifest.get("total_sources") or manifest.get("total_cadernos_expected") or 0),
+                "processed": sum(int(value or 0) for value in poll_counts.values()) if poll_counts else int(manifest.get("total_cadernos_processed") or 0),
+                "empty": int(poll_counts.get("unchanged") or 0) + int(poll_counts.get("baseline_old") or 0) if poll_counts else int(manifest.get("total_cadernos_empty") or 0),
+                "pending": 0 if poll_manifest else int(manifest.get("total_cadernos_pending") or 0),
+                "publications": int(poll_manifest.get("events_imported") or manifest.get("total_publications") or 0),
+                "errors": int(poll_counts.get("error") or 0) + int(poll_counts.get("remote_error") or 0) + len(manifest.get("errors") or []),
             },
             "policy": {
-                "schedule": schedule,
-                "retry_until": str(control.get("retry_until") or "08:00"),
+                "schedule": "08:00 / 12:00 / 18:00",
+                "retry_until": str(control.get("retry_until") or "18:00"),
                 "timezone": str(control.get("timezone") or "America/Sao_Paulo"),
-                "courts": "TST + TRT1-TRT24",
-                "mediums": ["D", "E"],
-                "source_date": "dataUltimoEnvio do Comunica PJe",
+                "courts": "CSJT + TST + TRT1-TRT24",
+                "mediums": poll_manifest.get("mediums") or ["J"],
+                "source_date": "Data da disponibilização extraída do PDF fixo do DEJT",
             },
             "cadernos": cadernos,
             "pending": pending if isinstance(pending, list) else [],
             "http_status_counts": dict(status_counts),
             "recent_requests": list(reversed(request_rows[-80:])),
-            "latest_manifest_path": str(manifest_path) if manifest_path else "",
+            "latest_manifest_path": str(poll_manifest_path or manifest_path or ""),
             "next_run_at": next_run_at,
             "generated_at": now_iso(),
         }
