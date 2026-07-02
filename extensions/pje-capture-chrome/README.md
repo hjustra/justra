@@ -28,8 +28,8 @@ As duas ações varrem os documentos da lista visível, abrem cada item, aguarda
 - Quando o documento está em HTML ou iframe acessível, salva o texto em `documents[].content_text`.
 - Salva uma auditoria em `document_candidates[]` com o status de cada item encontrado na lista.
 - Quando o conteúdo está em visualizador fechado/PDF sem texto acessível, salva referências em `document_refs[]` para a próxima etapa de download/extração.
-- O botão "Enviar para Justra" envia para `http://127.0.0.1:8787/api/pje-extension/import`.
+- O botão "Enviar para Justra" envia para `https://staging.justra.com.br/api/pje-extension/import`.
 
 Os imports enviados ficam em:
 
-`/Users/heitordoamaraljurkovich/Desktop/justra/pesquisa/data/app/pje_extension_imports.jsonl`
+`/mnt/justra-data/app/pje_extension_imports.jsonl` no ambiente de staging.

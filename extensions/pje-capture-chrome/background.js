@@ -1,7 +1,7 @@
-const JUSTRA_LOCAL_IMPORT_URL = "http://127.0.0.1:8787/api/pje-extension/import";
+const JUSTRA_IMPORT_URL = "https://staging.justra.com.br/api/pje-extension/import";
 
 async function importIntoJustra(payload) {
-  const response = await fetch(JUSTRA_LOCAL_IMPORT_URL, {
+  const response = await fetch(JUSTRA_IMPORT_URL, {
     method: "POST",
     headers: {
       "Content-Type": "application/json"

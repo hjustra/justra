@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
   "name": "Justra PJe Capture",
-  "version": "0.4.0",
-  "description": "Captura dados visíveis do PJe TRT2 para teste de importação na Justra.",
+  "version": "0.4.1",
+  "description": "Captura dados visíveis do PJe TRT2 para importação na Justra.",
   "icons": {
     "128": "icons/justra-128.png"
   },
@@ -13,7 +13,7 @@
   ],
   "host_permissions": [
     "https://pje.trt2.jus.br/*",
-    "http://127.0.0.1:8787/*"
+    "https://staging.justra.com.br/*"
   ],
   "action": {
     "default_title": "Justra PJe",

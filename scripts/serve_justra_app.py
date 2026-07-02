@@ -6947,7 +6947,10 @@ class JustraApp:
                         dedupe_key = (source, "handle", key)
                     else:
                         dedupe_key = (source, kind, code)
-                    row["_path"] = str(path.relative_to(ROOT))
+                    try:
+                        row["_path"] = str(path.relative_to(ROOT))
+                    except ValueError:
+                        row["_path"] = str(path.relative_to(DATA_ROOT))
                     existing = rows_by_key.get(dedupe_key)
                     if existing and existing.get("source_layer") == "jurisprudencia_tst_site":
                         continue
