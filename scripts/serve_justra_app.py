@@ -9080,8 +9080,18 @@ def make_handler(app: JustraApp):
             return host in {"127.0.0.1", "::1", "localhost"} or host.startswith("::ffff:127.")
 
         @staticmethod
-        def _is_allowed_extension_origin(origin: str) -> bool:
-            return not origin or origin.startswith("chrome-extension://")
+        def _allowed_extension_origins() -> set[str]:
+            raw = os.getenv("JUSTRA_PJE_EXTENSION_ORIGINS", "").strip()
+            return {item.strip().rstrip("/") for item in raw.split(",") if item.strip()}
+
+        def _is_allowed_extension_origin(self, origin: str) -> bool:
+            normalized = str(origin or "").strip().rstrip("/")
+            if not normalized:
+                return self._is_local_client(str(self.client_address[0]))
+            if not normalized.startswith("chrome-extension://"):
+                return False
+            allowed = self._allowed_extension_origins()
+            return not allowed or normalized in allowed
 
         def _redirect(self, location: str, cookies: list[str] | None = None) -> None:
             self.send_response(302)
@@ -9411,9 +9421,6 @@ def make_handler(app: JustraApp):
                     self._send_json(app.complete_google_login(str(payload.get("login_code", ""))))
                     return
                 if parsed.path == "/api/pje-extension/import":
-                    if not self._is_local_client(str(self.client_address[0])):
-                        self._send_json({"error": "endpoint disponível apenas localmente"}, status=403)
-                        return
                     if not self._is_allowed_extension_origin(self.headers.get("Origin", "")):
                         self._send_json({"error": "origem não permitida para importação PJe"}, status=403)
                         return
