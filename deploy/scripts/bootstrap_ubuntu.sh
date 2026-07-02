@@ -18,6 +18,12 @@ run_as_justra() {
   (cd / && sudo -H -u justra env HOME=/home/justra "$@")
 }
 
+run_as_justra_in() {
+  local workdir="$1"
+  shift
+  (cd "${workdir}" && sudo -H -u justra env HOME=/home/justra "$@")
+}
+
 apt-get update
 apt-get install -y \
   git \
@@ -68,12 +74,12 @@ run_as_justra "${APP_DIR}/.venv/bin/python" -m pip install --upgrade pip
 run_as_justra "${APP_DIR}/.venv/bin/pip" install -r "${APP_DIR}/requirements.txt"
 
 if [[ ! -f "${NODE_RUNTIME_DIR}/package.json" ]]; then
-  run_as_justra npm --prefix "${NODE_RUNTIME_DIR}" init -y
+  run_as_justra_in "${NODE_RUNTIME_DIR}" npm init -y
 fi
-run_as_justra npm --prefix "${NODE_RUNTIME_DIR}" install playwright
+run_as_justra_in "${NODE_RUNTIME_DIR}" npm install playwright
 npm --prefix "${NODE_RUNTIME_DIR}" exec -- playwright install-deps chromium
-run_as_justra env PLAYWRIGHT_BROWSERS_PATH="${NODE_RUNTIME_DIR}/browsers" \
-  npm --prefix "${NODE_RUNTIME_DIR}" exec -- playwright install chromium
+run_as_justra_in "${NODE_RUNTIME_DIR}" env PLAYWRIGHT_BROWSERS_PATH="${NODE_RUNTIME_DIR}/browsers" \
+  npm exec -- playwright install chromium
 chown -R justra:justra "${NODE_RUNTIME_DIR}"
 
 if [[ ! -f /etc/justra/justra.env ]]; then
