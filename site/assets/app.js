@@ -1930,7 +1930,7 @@ function watchForProcess(processNumber, data = state.updates || {}) {
 
 function datajudMovementRowsForProcess(processNumber, data = state.updates || {}) {
   const record = datajudRecordForProcess(processNumber, data);
-  if (!record || record.status !== "ok") return [];
+  if (!record || !Array.isArray(record.movements) || !record.movements.length) return [];
   return (record.movements || []).map((movement) => ({
     id: `datajud:${record.process_number}:${movement.id}`,
     source_type: "datajud",
@@ -1973,8 +1973,10 @@ function timelineRowsForProcess(processNumber, data = state.updates || {}) {
 }
 
 function processTimelineStatus(watch = {}, record = {}, rows = []) {
+  if ((record.status === "error" || record.status === "partial_error" || record.status === "rate_limited") && Number(record.movement_count || 0) > 0) return "DataJud parcial";
   if (record.status === "rate_limited") return "Consulta limitada pelo DataJud";
   if (record.status === "error") return "Consulta DataJud pendente";
+  if (record.status === "partial_error") return "Consulta DataJud parcial";
   if (record.status === "not_found") return "Processo não localizado no DataJud";
   if (record.status === "not_configured") return "DataJud sem chave configurada";
   if (!rows.length) return "Sem atos carregados";
@@ -2123,6 +2125,8 @@ function renderUpdates(data = {}) {
         const selected = processNumber && processNumber === compactProcessNumber(state.updateTimelineProcess);
         const datajudStatus = watch.datajud_status === "ok"
           ? `${fmt(watch.datajud_movement_count || 0)} mov.`
+          : (watch.datajud_status === "error" || watch.datajud_status === "partial_error" || watch.datajud_status === "rate_limited") && Number(watch.datajud_movement_count || 0) > 0
+            ? `${fmt(watch.datajud_movement_count || 0)} mov. (parcial)`
           : watch.datajud_status === "not_found"
             ? "não encontrado"
             : watch.datajud_status === "error"

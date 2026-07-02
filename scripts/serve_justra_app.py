@@ -3073,7 +3073,7 @@ class JustraApp:
             parsed = datetime.fromisoformat(fetched_at)
         except ValueError:
             return True
-        if record.get("status") in {"error", "rate_limited", "not_configured"}:
+        if record.get("status") in {"error", "partial_error", "rate_limited", "not_configured"}:
             return datetime.now() - parsed > timedelta(minutes=30)
         if record.get("status") == "invalid_court":
             return False
@@ -3287,6 +3287,9 @@ class JustraApp:
                 response = getattr(exc, "response", None)
                 if getattr(response, "status_code", None) == 429:
                     status = "rate_limited"
+                previous_movements = (previous or {}).get("movements", [])
+                if previous_movements and status == "error":
+                    status = "partial_error"
                 record = {
                     **(previous or {}),
                     "process_number": process_number,
@@ -3296,7 +3299,7 @@ class JustraApp:
                     "status": status,
                     "fetched_at": now_iso(),
                     "error": str(exc)[:240],
-                    "movements": (previous or {}).get("movements", []),
+                    "movements": previous_movements,
                     "movement_count": int((previous or {}).get("movement_count") or 0),
                 }
         with self.datajud_lock:
@@ -3352,9 +3355,12 @@ class JustraApp:
         records = self._cached_datajud_records(process_numbers)
         rows: list[dict[str, Any]] = []
         for record in records:
-            if not isinstance(record, dict) or record.get("status") != "ok":
+            if not isinstance(record, dict):
                 continue
-            for movement in record.get("movements") or []:
+            movements = record.get("movements") or []
+            if not movements:
+                continue
+            for movement in movements:
                 movement_date = movement.get("movement_date") or ""
                 rows.append(
                     {
