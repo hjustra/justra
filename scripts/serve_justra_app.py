@@ -640,6 +640,7 @@ def _run_djen_collection_unlocked(mode: str = "daily", dry_run: bool = False, re
                 "imported_dates": imported_dates,
                 "events_imported": int(poll_manifest.get("events_imported") or 0),
             },
+            "note": "DJEN coletado por polling dos PDFs fixos do DEJT; PDFs antigos são baseline e só edições novas entram.",
             "total_publications": int(djen_manifest.get("total_publications") or poll_manifest.get("events_imported") or 0),
             "total_pending": 0,
             "deadline_parser": deadline_parser,
