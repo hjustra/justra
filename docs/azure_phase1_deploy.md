@@ -48,6 +48,48 @@ JUSTRA_CHROME_PATH=
 - Retencao local: 30 a 60 dias para bruto pesado.
 - Arquivo historico: Blob Storage com lifecycle para Cool/Archive.
 
+## Criacao inicial pelo Portal Azure
+
+Sugestao para staging:
+
+- Resource Group: `rg-justra-staging`.
+- Regiao: `East US`, salvo se houver motivo juridico/latencia para Brasil.
+- Sistema: Ubuntu Server LTS.
+- Tamanho: `B2s` ou `B2ms`.
+- Disco do sistema: 64 GB.
+- Disco de dados: 1 TB Standard SSD LRS.
+- Portas liberadas: 22 temporariamente para SSH, 80 e 443 para web.
+- IP publico: static.
+
+Depois de acessar a VM por SSH, identifique o disco de dados com:
+
+```bash
+lsblk
+```
+
+Monte o disco em `/mnt/justra-data`. Exemplo para um disco novo em `/dev/sdc`:
+
+```bash
+sudo mkfs.ext4 /dev/sdc
+sudo mkdir -p /mnt/justra-data /mnt/justra-logs
+sudo blkid /dev/sdc
+```
+
+Adicione o UUID em `/etc/fstab`:
+
+```text
+UUID=<uuid-do-disco> /mnt/justra-data ext4 defaults,nofail 0 2
+```
+
+Depois:
+
+```bash
+sudo mount -a
+sudo mkdir -p /mnt/justra-data /mnt/justra-logs
+```
+
+Se o disco tiver particao, use o caminho da particao, por exemplo `/dev/sdc1`, em vez do disco inteiro. O bootstrap cria o usuario `justra` e ajusta o dono de `/mnt/justra-data` e `/mnt/justra-logs`.
+
 ## Fluxo de deploy
 
 Inicio manual por SSH:

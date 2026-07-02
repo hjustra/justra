@@ -1,0 +1,24 @@
+[Unit]
+Description=Justra web app
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=simple
+User=justra
+Group=justra
+WorkingDirectory=/opt/justra/app
+EnvironmentFile=/etc/justra/justra.env
+ExecStart=/opt/justra/app/.venv/bin/python -u scripts/serve_justra_app.py --host 127.0.0.1 --port 8787
+Restart=on-failure
+RestartSec=5
+TimeoutStopSec=30
+StandardOutput=journal
+StandardError=journal
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=full
+ReadWritePaths=/mnt/justra-data /mnt/justra-logs /opt/justra/app
+
+[Install]
+WantedBy=multi-user.target
