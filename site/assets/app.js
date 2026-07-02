@@ -2494,12 +2494,14 @@ function casePjeCollectionPending(caseItem = {}) {
 }
 
 function processCenterLatestCell(latest = {}, watch = {}, caseItem = {}) {
-  if (casePjeCollectionPending(caseItem)) {
+  const pjePending = casePjeCollectionPending(caseItem);
+  if (latest.id) {
+    const pendingNote = pjePending ? `<br><span class="muted">PJe pendente: envie pela extensão.</span>` : "";
+    return `${updateSourceBadge(latest)} ${updateCategoryBadge(latest)}<br><span class="muted">${escapeHtml(updateDateLabel(latest))} · ${escapeHtml(short(latest.title || latest.summary || "", 86))}</span>${pendingNote}`;
+  }
+  if (pjePending) {
     const label = caseItem.pje_import?.status_label || "Coleta PJe pendente";
     return `<span class="pje-collection-reminder">${escapeHtml(label)}</span><br><span class="muted">Abra o PJe, resolva o CAPTCHA e envie pela extensão.</span>`;
-  }
-  if (latest.id) {
-    return `${updateSourceBadge(latest)} ${updateCategoryBadge(latest)}<br><span class="muted">${escapeHtml(updateDateLabel(latest))} · ${escapeHtml(short(latest.title || latest.summary || "", 86))}</span>`;
   }
   const datajudStatus = watch.datajud_status || "";
   if (datajudStatus === "pending") return `<span class="muted">DataJud em fila</span>`;
