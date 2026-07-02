@@ -19,10 +19,14 @@ ROOT = Path(__file__).resolve().parents[1]
 from justra_runtime_paths import DATA_ROOT, LOG_ROOT  # noqa: E402
 DEFAULT_DATA_DIR = DATA_ROOT
 TZ = ZoneInfo("America/Sao_Paulo")
-PARSER_VERSION = "0.1"
+PARSER_VERSION = "0.2"
 CNJ_DIGITS_RE = re.compile(r"\D+")
 EXPLICIT_DAYS_RE = re.compile(
     r"\b(?:no\s+)?prazo\s+de\s+0*(\d{1,3})\s+dias?\b|\bem\s+0*(\d{1,3})\s+dias?\b",
+    re.IGNORECASE,
+)
+RELATIVE_HOURS_BEFORE_RE = re.compile(
+    r"\b(?:prazo\s+de\s+)?(?:ate\s+)?0*(\d{1,3})\s+horas?\s+antes\b",
     re.IGNORECASE,
 )
 DATE_RE = re.compile(r"\b(\d{1,2})/(\d{1,2})/(\d{4})\b")
@@ -399,6 +403,69 @@ def detect_calendar_event(text: str, normalized_text: str) -> dict[str, Any] | N
     }
 
 
+def related_calendar_deadline(
+    event: dict[str, Any],
+    calendar_payload: dict[str, Any],
+    normalized_text: str,
+    parser_run_id: str,
+    today: date,
+) -> dict[str, Any] | None:
+    match = RELATIVE_HOURS_BEFORE_RE.search(normalized_text)
+    if not match or not calendar_payload.get("event_date"):
+        return None
+    if not any(marker in normalized_text for marker in ["sustentacao oral", "inscricao", "inscrito"]):
+        return None
+    try:
+        hours = int(match.group(1))
+    except ValueError:
+        return None
+    event_day = parse_iso_date(calendar_payload.get("event_date"))
+    if not event_day:
+        return None
+    days_before = max(1, (hours + 23) // 24)
+    due_day = event_day - timedelta(days=days_before)
+    risk_level, risk_reasons = risk_for_deadline(due_day, None, normalized_text, today, explicit=True)
+    evidence = calendar_payload.get("evidence") if isinstance(calendar_payload.get("evidence"), dict) else {}
+    return {
+        "id": f"djen-deadline-{event_id(event)}-sustentacao-oral-001",
+        "source": "djen_deadline_parser",
+        "source_version": PARSER_VERSION,
+        "parser_run_id": parser_run_id,
+        **base_publication(event),
+        "availability_date": event.get("publication_date") or "",
+        "legal_publication_date": event.get("publication_date") or "",
+        "start_date": event.get("publication_date") or "",
+        "due_date": due_day.isoformat(),
+        "deadline_days": None,
+        "deadline_day_type": None,
+        "deadline_source": f"relative_calendar_{hours}_hours_before",
+        "trigger_type": "sustentacao_oral",
+        "deadline_kind": "sustentacao_oral",
+        "action_required": True,
+        "risk_level": risk_level,
+        "risk_reasons": risk_reasons,
+        "confidence": "high",
+        "requires_human_review": True,
+        "requires_holiday_validation": True,
+        "requires_pje_opening": False,
+        "intimated_parties": calendar_payload.get("intimated_parties") or [],
+        "attorneys": calendar_payload.get("attorneys") or [],
+        "evidence": {
+            "matched_terms": ["sustentacao oral", f"{hours} horas antes"],
+            "text_excerpt": evidence.get("text_excerpt") or "",
+            "related_calendar_event_id": calendar_payload.get("id") or "",
+            "related_event_date": calendar_payload.get("event_date") or "",
+            "related_event_time": calendar_payload.get("event_time") or "",
+        },
+        "calculation_notes": [
+            f"prazo derivado de {hours} horas antes do evento de calendario",
+            "data limite simplificada em dia calendario; validar horario e feriados manualmente",
+        ],
+        "raw_text": calendar_payload.get("raw_text") or "",
+        "created_at": now_iso(),
+    }
+
+
 def risk_for_deadline(due: date | None, days: int | None, normalized_text: str, today: date, explicit: bool) -> tuple[str, list[str]]:
     reasons: list[str] = []
     risk = "medium"
@@ -650,6 +717,25 @@ def process_file(args: argparse.Namespace) -> dict[str, Any]:
                         risk_counts[payload.get("risk_level") or "unknown"] += 1
                         trigger_counts[payload.get("event_type") or "unknown"] += 1
                         calendar_handle.write(json.dumps(payload, ensure_ascii=False, separators=(",", ":")) + "\n")
+                        related_deadline = related_calendar_deadline(
+                            event,
+                            payload,
+                            norm(clean_text(event.get("text"))),
+                            parser_run_id,
+                            today,
+                        )
+                        if related_deadline:
+                            counts["deadline_candidates"] += 1
+                            risk_counts[related_deadline.get("risk_level") or "unknown"] += 1
+                            trigger_counts[related_deadline.get("trigger_type") or "unknown"] += 1
+                            deadline_handle.write(json.dumps(related_deadline, ensure_ascii=False, separators=(",", ":")) + "\n")
+                            if related_deadline.get("requires_human_review"):
+                                counts["requires_human_review"] += 1
+                                if review_written < args.review_sample:
+                                    append_jsonl(review_path, related_deadline)
+                                    review_written += 1
+                            if related_deadline.get("requires_holiday_validation"):
+                                counts["requires_holiday_validation"] += 1
                     else:
                         counts["non_deadline_publications"] += 1
                         non_deadline_handle.write(json.dumps(payload, ensure_ascii=False, separators=(",", ":")) + "\n")
@@ -680,7 +766,7 @@ def process_file(args: argparse.Namespace) -> dict[str, Any]:
         "target_date": target_date,
         "mode": args.mode,
         "parser_version": PARSER_VERSION,
-        "rules_version": 1,
+        "rules_version": 2,
         "date_policy": "electronic_diary_next_business_day",
         "count_policy": "start_date_inclusive_business_days",
         "calendar_policy": "basic_weekdays",
