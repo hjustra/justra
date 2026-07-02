@@ -394,13 +394,13 @@ def _run_falcao_collection_range(
 
 def _run_falcao_safe_collection(app: "JustraApp | None" = None) -> None:
     """Collect D-1 nationally with direct API partitioning."""
-    target_date = (date.today() - timedelta(days=1)).isoformat()
+    target_date = (datetime.now(APP_TZ).date() - timedelta(days=1)).isoformat()
     _run_falcao_collection_range(app, target_date, target_date, "d-1")
 
 
 def _resume_incomplete_falcao_d1(app: "JustraApp") -> None:
     """Resume an interrupted D-1 checkpoint after an application restart."""
-    target_date = (date.today() - timedelta(days=1)).isoformat()
+    target_date = (datetime.now(APP_TZ).date() - timedelta(days=1)).isoformat()
     output_dir = DATA_ROOT / "raw" / "falcao" / f"daily_{target_date}"
     status = load_json_file(output_dir / "status.json", {})
     control = falcao_control()
@@ -411,10 +411,12 @@ def _resume_incomplete_falcao_d1(app: "JustraApp") -> None:
 
 
 def _falcao_daily_scheduler(stop: threading.Event, app: "JustraApp") -> None:
-    """Schedule the cautious collector once per day at 12:30 local time."""
+    """Schedule the cautious collector once per day in the app timezone."""
     while not stop.is_set():
-        now = datetime.now()
-        target = now.replace(hour=12, minute=30, second=0, microsecond=0)
+        control = falcao_control()
+        hour, minute = parse_hhmm(control.get("schedule"), fallback="12:30")
+        now = datetime.now(APP_TZ)
+        target = now.replace(hour=hour, minute=minute, second=0, microsecond=0)
         if target <= now:
             target += timedelta(days=1)
         if stop.wait(max(1.0, (target - now).total_seconds())):
@@ -4665,7 +4667,7 @@ class JustraApp:
             "dry_run": dry_run,
             "import_id": import_id,
             "process_number": process_number,
-            "inbox_path": str(PJE_EXTENSION_IMPORTS_PATH.relative_to(ROOT)),
+            "inbox_path": str(PJE_EXTENSION_IMPORTS_PATH.relative_to(DATA_ROOT)),
             **promotion,
         }
 
@@ -6385,10 +6387,7 @@ class JustraApp:
         durations = [float(row.get("elapsed_ms") or 0) for row in request_rows]
         request_count = int(status.get("requests_this_run") or len(request_rows))
         elapsed_total = float(status.get("request_elapsed_total_ms") or sum(durations))
-        now = datetime.now()
-        next_run = now.replace(hour=12, minute=30, second=0, microsecond=0)
-        if next_run <= now:
-            next_run += timedelta(days=1)
+        next_run = next_local_run_at(control.get("schedule"), fallback="12:30")
 
         coverage: dict[str, dict[str, dict[str, Any]]] = {}
         total_collected_documents = 0
@@ -6538,7 +6537,7 @@ class JustraApp:
             "recent_requests": recent_requests,
             "current": status.get("current"),
             "latest_output_dir": str(latest_dir) if latest_dir else "",
-            "next_run_at": next_run.isoformat(timespec="seconds"),
+            "next_run_at": next_run,
             "backfill_plan": {
                 "days": FALCAO_PLAN_DAYS,
                 "start_date": plan_start.isoformat(),
