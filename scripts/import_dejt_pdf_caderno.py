@@ -153,18 +153,30 @@ def parse_recipients(block: str) -> list[dict[str, str]]:
 
 def parse_attorneys(block: str) -> list[dict[str, str]]:
     attorneys: list[dict[str, str]] = []
+    seen: set[tuple[str, str, str]] = set()
     lines = [re.sub(r"\s+", " ", line).strip() for line in block.splitlines()]
     for index, line in enumerate(lines):
         if not line.startswith("ADVOGADO"):
             continue
-        combined = " ".join(lines[index : index + 3])
-        match = OAB_RE.search(combined)
+        parts: list[str] = []
+        match = None
+        combined = ""
+        for candidate in lines[index : index + 4]:
+            parts.append(candidate)
+            combined = " ".join(parts)
+            match = OAB_RE.search(combined)
+            if match:
+                break
         if not match:
             continue
-        name = combined.replace("ADVOGADO", "", 1)
-        name = OAB_RE.sub("", name)
+        name = combined[: match.start()].replace("ADVOGADO", "", 1)
         name = re.sub(r"\s+", " ", name).strip(" -")
-        attorneys.append({"name": name[:160], "oab": re.sub(r"\D", "", match.group(1)), "uf": match.group(2).upper()})
+        row = {"name": name[:160], "oab": re.sub(r"\D", "", match.group(1)), "uf": match.group(2).upper()}
+        key = (row["name"], row["oab"], row["uf"])
+        if key in seen:
+            continue
+        seen.add(key)
+        attorneys.append(row)
     return attorneys
 
 
