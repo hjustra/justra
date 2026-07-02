@@ -90,7 +90,11 @@ fi
 install -m 644 "${APP_DIR}/deploy/systemd/justra.service" /etc/systemd/system/justra.service
 install -m 644 "${APP_DIR}/deploy/systemd/justra-djen-daily.service" /etc/systemd/system/justra-djen-daily.service
 install -m 644 "${APP_DIR}/deploy/systemd/justra-djen-daily.timer" /etc/systemd/system/justra-djen-daily.timer
-install -m 644 "${APP_DIR}/deploy/nginx/justra.conf" /etc/nginx/sites-available/justra.conf
+if [[ -f /etc/nginx/sites-available/justra.conf ]] && grep -q "managed by Certbot" /etc/nginx/sites-available/justra.conf; then
+  echo "Preservando /etc/nginx/sites-available/justra.conf gerenciado pelo Certbot."
+else
+  install -m 644 "${APP_DIR}/deploy/nginx/justra.conf" /etc/nginx/sites-available/justra.conf
+fi
 ln -sfn /etc/nginx/sites-available/justra.conf /etc/nginx/sites-enabled/justra.conf
 rm -f /etc/nginx/sites-enabled/default
 
