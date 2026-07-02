@@ -2506,9 +2506,18 @@ class JustraApp:
         return {"ok": True, "removed": removed, "process_number": process_number}
 
     def _deadline_output_path(self, value: Any) -> Path:
-        path = Path(str(value or ""))
+        raw = str(value or "")
+        path = Path(raw)
         if not path.is_absolute():
             path = ROOT / path
+        if path.exists():
+            return path
+        parts = Path(raw).parts
+        if "data" in parts:
+            data_index = parts.index("data")
+            suffix_parts = parts[data_index + 1 :]
+            if suffix_parts:
+                return DATA_ROOT.joinpath(*suffix_parts)
         return path
 
     def _deadline_index_source(self) -> dict[str, Any]:
