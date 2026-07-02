@@ -3311,7 +3311,11 @@ class JustraApp:
         wanted = sorted({compact_process_number(value) for value in process_numbers if compact_process_number(value)})
         with self.datajud_lock:
             process_store = self.datajud_movements.get("processes") or {}
-            return [copy.deepcopy(process_store.get(process_number, {})) for process_number in wanted]
+            records = [copy.deepcopy(process_store.get(process_number, {})) for process_number in wanted]
+        for record in records:
+            if isinstance(record, dict) and record.get("status") == "error" and record.get("movements"):
+                record["status"] = "partial_error"
+        return records
 
     def _queue_datajud_refresh(self, process_numbers: set[str], force: bool = False) -> int:
         wanted = sorted({compact_process_number(value) for value in process_numbers if compact_process_number(value)})
