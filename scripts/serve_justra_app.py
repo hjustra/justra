@@ -59,6 +59,9 @@ PJE_EXTENSION_IMPORTS_PATH = APP_DATA_DIR / "pje_extension_imports.jsonl"
 ACTIVE_DEADLINE_LOOKBACK_DAYS = 30
 ACTIVE_UPDATE_LOOKBACK_DAYS = 30
 DATAJUD_REFRESH_HOURS = 6
+DATAJUD_ERROR_RETRY_MINUTES = 30
+DATAJUD_RATE_LIMIT_COOLDOWN_MINUTES = 60
+DATAJUD_REQUEST_SPACING_SECONDS = 2.0
 DATAJUD_LABOR_COURTS = [f"trt{number}" for number in range(1, 25)] + ["tst"]
 DATAJUD_ENDPOINTS = {
     **{
@@ -2861,7 +2864,7 @@ class JustraApp:
         watches = self.user_deadline_watches(user_id)
         return self._deadline_summaries({watch.get("process_number") or "" for watch in watches})
 
-    def cached_deadline_summaries_for_user(self, user_id: str) -> dict[str, dict[str, Any]]:
+    def cached_deadline_summaries_for_user(self, user_id: str, *, build_if_missing: bool = True) -> dict[str, dict[str, Any]]:
         watches = self.user_deadline_watches(user_id)
         process_numbers = {compact_process_number(watch.get("process_number")) for watch in watches}
         process_numbers = {number for number in process_numbers if number}
@@ -2878,6 +2881,8 @@ class JustraApp:
             ):
                 return copy.deepcopy(summary_cached["summaries"])
             cached = self.deadline_cache.get("data")
+        if not build_if_missing:
+            return {}
         if isinstance(cached, dict) and cached.get("signature") == source.get("signature"):
             summaries = self._deadline_summaries_from_rows(
                 process_numbers,
@@ -3001,6 +3006,29 @@ class JustraApp:
     def _datajud_api_key(self) -> str:
         return os.getenv("DATAJUD_API_KEY", "").strip()
 
+    def _datajud_cooldown_until(self) -> str:
+        return str(self.datajud_movements.get("rate_limit_until") or "")
+
+    def _datajud_rate_limited(self) -> bool:
+        raw = self._datajud_cooldown_until()
+        if not raw:
+            return False
+        try:
+            return datetime.now() < datetime.fromisoformat(raw)
+        except ValueError:
+            return False
+
+    def _mark_datajud_rate_limit(self) -> None:
+        until = datetime.now() + timedelta(minutes=DATAJUD_RATE_LIMIT_COOLDOWN_MINUTES)
+        self.datajud_movements["last_rate_limit_at"] = now_iso()
+        self.datajud_movements["rate_limit_until"] = until.isoformat(timespec="seconds")
+        self._save_datajud_movements()
+
+    def _clear_datajud_rate_limit(self) -> None:
+        if self.datajud_movements.get("rate_limit_until") or self.datajud_movements.get("last_rate_limit_at"):
+            self.datajud_movements["rate_limit_until"] = ""
+            self._save_datajud_movements()
+
     def _datajud_court_from_process(self, process_number: str) -> str:
         digits = compact_process_number(process_number)
         if not digits or digits[13] != "5":
@@ -3094,7 +3122,7 @@ class JustraApp:
         except ValueError:
             return True
         if record.get("status") in {"error", "partial_error", "rate_limited", "not_configured"}:
-            return datetime.now() - parsed > timedelta(minutes=30)
+            return datetime.now() - parsed > timedelta(minutes=DATAJUD_ERROR_RETRY_MINUTES)
         if record.get("status") == "invalid_court":
             return False
         return datetime.now() - parsed > timedelta(hours=DATAJUD_REFRESH_HOURS)
@@ -3341,6 +3369,7 @@ class JustraApp:
             previous = copy.deepcopy((self.datajud_movements.get("processes") or {}).get(process_number))
         if not self._datajud_record_stale(previous, force=force):
             return previous
+        cooldown_until = ""
         court = self._datajud_court_from_process(process_number)
         if not court:
             record = {
@@ -3388,6 +3417,9 @@ class JustraApp:
                 response = getattr(exc, "response", None)
                 if getattr(response, "status_code", None) == 429:
                     status = "rate_limited"
+                    cooldown_until = (
+                        datetime.now() + timedelta(minutes=DATAJUD_RATE_LIMIT_COOLDOWN_MINUTES)
+                    ).isoformat(timespec="seconds")
                 previous_movements = (previous or {}).get("movements", [])
                 if previous_movements and status == "error":
                     status = "partial_error"
@@ -3404,6 +3436,11 @@ class JustraApp:
                     "movement_count": int((previous or {}).get("movement_count") or 0),
                 }
         with self.datajud_lock:
+            if record.get("status") == "rate_limited":
+                self.datajud_movements["last_rate_limit_at"] = now_iso()
+                self.datajud_movements["rate_limit_until"] = cooldown_until
+            elif record.get("status") == "ok":
+                self.datajud_movements["rate_limit_until"] = ""
             self.datajud_movements.setdefault("processes", {})[process_number] = record
             self._save_datajud_movements()
         return copy.deepcopy(record)
@@ -3422,6 +3459,8 @@ class JustraApp:
         wanted = sorted({compact_process_number(value) for value in process_numbers if compact_process_number(value)})
         queued: list[str] = []
         with self.datajud_lock:
+            if self._datajud_rate_limited():
+                return 0
             process_store = self.datajud_movements.get("processes") or {}
             for process_number in wanted:
                 if process_number in self.datajud_refreshing:
@@ -3436,11 +3475,16 @@ class JustraApp:
 
         def worker(numbers: list[str]) -> None:
             try:
-                for number in numbers:
+                for index, number in enumerate(numbers):
+                    with self.datajud_lock:
+                        if self._datajud_rate_limited():
+                            break
                     try:
                         self._fetch_datajud_process(number, force=force)
                     except Exception as exc:  # noqa: BLE001
                         print(f"[justra] falha ao atualizar DataJud {format_process_number(number)}: {exc}")
+                    if index < len(numbers) - 1:
+                        time.sleep(DATAJUD_REQUEST_SPACING_SECONDS)
             finally:
                 with self.datajud_lock:
                     for number in numbers:
@@ -3506,6 +3550,8 @@ class JustraApp:
             "configured": bool(self._datajud_api_key()),
             "queued": queued,
             "refreshing": sorted(self.datajud_refreshing),
+            "rate_limited": self._datajud_rate_limited(),
+            "cooldown_until": self._datajud_cooldown_until(),
         }
 
     def _datajud_lawyer_query(self, lawyer_name: str, oab: str, uf: str, size: int) -> dict[str, Any]:
@@ -3589,6 +3635,15 @@ class JustraApp:
         return copy.deepcopy(watch)
 
     def datajud_lawyer_watch(self, user_id: str, payload: dict[str, Any]) -> dict[str, Any]:
+        if self._datajud_rate_limited():
+            cooldown_until = self._datajud_cooldown_until()
+            return {
+                "ok": False,
+                "found": [],
+                "errors": [{"court": "DATAJUD", "error": f"consulta pausada por limite até {cooldown_until}"}],
+                "search": {},
+                "cooldown_until": cooldown_until,
+            }
         lawyer_name = re.sub(r"\s+", " ", str(payload.get("name") or payload.get("lawyer_name") or "")).strip()
         oab = only_digits(payload.get("oab"))
         uf = re.sub(r"[^A-Za-z]", "", str(payload.get("uf") or "")).upper()[:2]
@@ -3607,15 +3662,24 @@ class JustraApp:
         errors: list[dict[str, str]] = []
 
         def search_court(court: str) -> tuple[str, list[dict[str, Any]], str]:
+            if self._datajud_rate_limited():
+                return court, [], "consulta pausada por limite do DataJud"
             try:
                 query = self._datajud_lawyer_query(lawyer_name, oab, uf, min(20, total_limit))
                 payload_result = self._datajud_search(court, query, timeout=12)
                 hits = ((payload_result.get("hits") or {}).get("hits") or []) if isinstance(payload_result, dict) else []
                 return court, hits, ""
             except Exception as exc:  # noqa: BLE001
+                response = getattr(exc, "response", None)
+                if getattr(response, "status_code", None) == 429:
+                    with self.datajud_lock:
+                        until = datetime.now() + timedelta(minutes=DATAJUD_RATE_LIMIT_COOLDOWN_MINUTES)
+                        self.datajud_movements["last_rate_limit_at"] = now_iso()
+                        self.datajud_movements["rate_limit_until"] = until.isoformat(timespec="seconds")
+                        self._save_datajud_movements()
                 return court, [], str(exc)[:180]
 
-        with ThreadPoolExecutor(max_workers=min(6, max(1, len(courts)))) as executor:
+        with ThreadPoolExecutor(max_workers=min(2, max(1, len(courts)))) as executor:
             futures = [executor.submit(search_court, court) for court in courts]
             court_results = []
             for future in as_completed(futures):
@@ -4125,6 +4189,8 @@ class JustraApp:
                 "datajud_refresh_hours": DATAJUD_REFRESH_HOURS,
                 "datajud_queued": int(datajud.get("queued") or 0),
                 "datajud_refreshing": len(datajud.get("refreshing") or []),
+                "datajud_rate_limited": bool(datajud.get("rate_limited")),
+                "datajud_cooldown_until": datajud.get("cooldown_until") or "",
             },
             "filters": {"category": category_filter, "q": search_query},
             "watches": watch_rows,
@@ -4138,6 +4204,8 @@ class JustraApp:
                 "records": datajud.get("records") or [],
                 "queued": int(datajud.get("queued") or 0),
                 "refreshing": datajud.get("refreshing") or [],
+                "rate_limited": bool(datajud.get("rate_limited")),
+                "cooldown_until": datajud.get("cooldown_until") or "",
             },
             "generated_at": now_iso(),
         }
@@ -4183,7 +4251,7 @@ class JustraApp:
 
     def list_cases(self, user_id: str, query: str = "") -> list[dict[str, Any]]:
         normalized_query = normalize(query)
-        deadline_summaries = self.cached_deadline_summaries_for_user(user_id)
+        deadline_summaries = self.cached_deadline_summaries_for_user(user_id, build_if_missing=False)
         rows = []
         for case in self.cases.values():
             if case.get("owner_user_id") != user_id:

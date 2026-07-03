@@ -2104,6 +2104,16 @@ function renderUpdateList(rows = []) {
   }).join("");
 }
 
+function datajudSummaryLabel(summary = {}) {
+  if (!summary.datajud_configured) return "sem chave configurada";
+  if (summary.datajud_rate_limited) {
+    return summary.datajud_cooldown_until
+      ? `pausado até ${fmtMoment(summary.datajud_cooldown_until)}`
+      : "pausado por limite";
+  }
+  return `cache ${fmt(summary.datajud_refresh_hours || 6)}h`;
+}
+
 function renderUpdates(data = {}) {
   state.updates = data;
   const summary = data.summary || {};
@@ -2123,8 +2133,8 @@ function renderUpdates(data = {}) {
     { label: "Decisões", value: fmt(summary.decision_updates), note: "sentença/acórdão/despacho" },
   ]);
   const sourceMeta = data.latest_manifest_path
-    ? `PJe ${fmt(summary.pje_updates || 0)} · DJEN ${summary.active_date_range || summary.latest_target_date || "sem data"} · DataJud ${summary.datajud_configured ? `cache ${fmt(summary.datajud_refresh_hours || 6)}h` : "sem chave configurada"}${summary.datajud_refreshing ? ` · atualizando ${fmt(summary.datajud_refreshing)}` : ""}`
-    : `PJe ${fmt(summary.pje_updates || 0)} · DataJud ${summary.datajud_configured ? `cache ${fmt(summary.datajud_refresh_hours || 6)}h` : "sem chave configurada"}${summary.datajud_refreshing ? ` · atualizando ${fmt(summary.datajud_refreshing)}` : ""}`;
+    ? `PJe ${fmt(summary.pje_updates || 0)} · DJEN ${summary.active_date_range || summary.latest_target_date || "sem data"} · DataJud ${datajudSummaryLabel(summary)}${summary.datajud_refreshing ? ` · atualizando ${fmt(summary.datajud_refreshing)}` : ""}`
+    : `PJe ${fmt(summary.pje_updates || 0)} · DataJud ${datajudSummaryLabel(summary)}${summary.datajud_refreshing ? ` · atualizando ${fmt(summary.datajud_refreshing)}` : ""}`;
   $("#updateSourceMeta").textContent = sourceMeta;
   const watches = data.watches || [];
   $("#updateWatchMeta").textContent = `${fmt(watches.length)} processos`;
@@ -2221,9 +2231,11 @@ async function refreshDatajudUpdates() {
   renderUpdates(data || {});
   const summary = data.summary || {};
   const active = Number(summary.datajud_queued || 0) + Number(summary.datajud_refreshing || 0);
-  $("#updateWatchStatus").textContent = active
-    ? `Consulta DataJud enviada. ${fmt(active)} processos em fila/atualização.`
-    : "Timeline DataJud atualizada pelo cache disponível.";
+  $("#updateWatchStatus").textContent = summary.datajud_rate_limited
+    ? `DataJud em pausa por limite${summary.datajud_cooldown_until ? ` até ${fmtMoment(summary.datajud_cooldown_until)}` : ""}. Cache mantido.`
+    : active
+      ? `Consulta DataJud enviada. ${fmt(active)} processos em fila/atualização.`
+      : "Timeline DataJud atualizada pelo cache disponível.";
   if (active) window.setTimeout(() => loadUpdates().catch(() => {}), 5000);
 }
 
@@ -2241,6 +2253,10 @@ async function searchMovementLawyer() {
     body: JSON.stringify({ name: lawyerName, oab, uf }),
   });
   renderUpdates(data.dashboard || {});
+  if (data.cooldown_until) {
+    $("#movementLawyerStatus").textContent = `DataJud em pausa por limite até ${fmtMoment(data.cooldown_until)}. Cache mantido.`;
+    return;
+  }
   const errors = data.errors?.length ? ` · ${fmt(data.errors.length)} tribunais sem resposta` : "";
   $("#movementLawyerStatus").textContent = `${fmt(data.found?.length || 0)} processos encontrados e acompanhados${errors}.`;
   window.setTimeout(() => loadUpdates().catch(() => {}), 5000);
@@ -2693,24 +2709,43 @@ async function loadPjeExtensionInstall() {
 async function loadProcessCenter(options = {}) {
   if ($("#processCenterStatus")) $("#processCenterStatus").textContent = options.refreshDatajud ? "Atualizando DataJud e montando a central..." : "Carregando processos...";
   loadPjeExtensionInstall().catch(() => {});
+  const casesData = await api("/api/cases?q=");
+  state.cases = casesData.cases || [];
+  state.deadlines = {};
+  state.updates = {};
+  state.processCenter = { cases: state.cases, deadlines: state.deadlines, updates: state.updates };
+  renderProcessCenter(state.processCenter);
+  if ($("#processCenterStatus")) {
+    $("#processCenterStatus").textContent = options.refreshDatajud
+      ? "Processos carregados. Atualizando prazos e DataJud..."
+      : "Processos carregados. Buscando prazos e movimentações...";
+  }
   const updatesPromise = options.refreshDatajud
     ? api("/api/updates/datajud/refresh", { method: "POST", body: JSON.stringify({ force: true }) })
     : api("/api/updates");
-  const [casesData, deadlinesData, updatesData] = await Promise.all([
-    api("/api/cases?q="),
-    api("/api/deadlines"),
-    updatesPromise,
-  ]);
-  state.cases = casesData.cases || [];
+  let deadlinesData = {};
+  let updatesData = {};
+  try {
+    [deadlinesData, updatesData] = await Promise.all([
+      api("/api/deadlines"),
+      updatesPromise,
+    ]);
+  } catch (err) {
+    if ($("#processCenterStatus")) $("#processCenterStatus").textContent = `Processos carregados; falha ao atualizar prazos/movimentações: ${err.message}`;
+    return state.processCenter;
+  }
   state.deadlines = deadlinesData || {};
   state.updates = updatesData || {};
   state.processCenter = { cases: state.cases, deadlines: state.deadlines, updates: state.updates };
   renderProcessCenter(state.processCenter);
+  const summary = state.updates.summary || {};
   const queued = Number(state.updates.summary?.datajud_queued || 0) + Number(state.updates.summary?.datajud_refreshing || 0);
   if ($("#processCenterStatus")) {
-    $("#processCenterStatus").textContent = queued
-      ? `Acompanhamento ativo. ${fmt(queued)} consulta(s) DataJud em fila/atualização.`
-      : "Acompanhamento carregado.";
+    $("#processCenterStatus").textContent = summary.datajud_rate_limited
+      ? `Acompanhamento carregado. DataJud em pausa por limite${summary.datajud_cooldown_until ? ` até ${fmtMoment(summary.datajud_cooldown_until)}` : ""}.`
+      : queued
+        ? `Acompanhamento ativo. ${fmt(queued)} consulta(s) DataJud em fila/atualização.`
+        : "Acompanhamento carregado.";
   }
   return state.processCenter;
 }
