@@ -2590,6 +2590,52 @@ class JustraApp:
         )
         return hashlib.sha1(seed.encode("utf-8")).hexdigest()[:24]
 
+    def _deadline_index_payload(self, row: dict[str, Any]) -> dict[str, Any]:
+        keys = (
+            "id",
+            "publication_event_id",
+            "communication_hash",
+            "process_number",
+            "process_number_masked",
+            "court_acronym",
+            "court_unit",
+            "medium",
+            "communication_type",
+            "document_type",
+            "class_name",
+            "availability_date",
+            "legal_publication_date",
+            "start_date",
+            "due_date",
+            "event_date",
+            "event_time",
+            "event_type",
+            "event_mode",
+            "deadline_days",
+            "deadline_kind",
+            "deadline_source",
+            "trigger_type",
+            "action_required",
+            "risk_level",
+            "confidence",
+            "requires_human_review",
+            "requires_holiday_validation",
+            "requires_pje_opening",
+            "source_url",
+            "created_at",
+        )
+        payload = {key: row.get(key) for key in keys if key in row}
+        if isinstance(row.get("intimated_parties"), list):
+            payload["intimated_parties"] = row["intimated_parties"][:12]
+        if isinstance(row.get("attorneys"), list):
+            payload["attorneys"] = row["attorneys"][:12]
+        if isinstance(row.get("evidence"), dict):
+            evidence = dict(row["evidence"])
+            if evidence.get("text_excerpt"):
+                evidence["text_excerpt"] = str(evidence.get("text_excerpt") or "")[:900]
+            payload["evidence"] = evidence
+        return payload
+
     def _ensure_deadline_process_index(self, item: dict[str, Any]) -> Path | None:
         signature = str(item.get("signature") or "")
         db_path = self._deadline_process_index_path(item)
@@ -2633,7 +2679,6 @@ class JustraApp:
                         target_date = str(row.get(target_field) or "")
                         if not process_number or not parse_date_yyyy_mm_dd(target_date):
                             continue
-                        compact = self._compact_deadline_record(row, kind)
                         event_key = self._deadline_event_key(row, kind, process_number)
                         batch.append(
                             (
@@ -2641,7 +2686,7 @@ class JustraApp:
                                 kind,
                                 event_key,
                                 target_date,
-                                json.dumps(compact, ensure_ascii=False, separators=(",", ":")),
+                                json.dumps(self._deadline_index_payload(row), ensure_ascii=False, separators=(",", ":")),
                             )
                         )
                         if len(batch) >= 1000:
@@ -2701,7 +2746,7 @@ class JustraApp:
                             except json.JSONDecodeError:
                                 continue
                             if isinstance(payload, dict):
-                                target.append(payload)
+                                target.append(self._compact_deadline_record(payload, str(row["kind"] or kind)))
         return deadlines, calendars
 
     def _deadline_index_source(self) -> dict[str, Any]:
@@ -4220,6 +4265,29 @@ class JustraApp:
         )
         return hashlib.sha1(seed.encode("utf-8")).hexdigest()[:24]
 
+    def _update_index_payload(self, row: dict[str, Any]) -> dict[str, Any]:
+        keys = (
+            "communication_id",
+            "communication_hash",
+            "process_number",
+            "process_number_masked",
+            "publication_date",
+            "sent_date",
+            "court_acronym",
+            "court_unit",
+            "medium",
+            "medium_full",
+            "communication_type",
+            "document_type",
+            "class_name",
+            "source_url",
+            "first_seen_at",
+        )
+        payload = {key: row.get(key) for key in keys if key in row}
+        if "text" in row:
+            payload["text"] = str(row.get("text") or "")[:2400]
+        return payload
+
     def _ensure_update_process_index(self, item: dict[str, Any]) -> Path | None:
         signature = str(item.get("signature") or "")
         db_path = self._update_process_index_path(item)
@@ -4258,13 +4326,12 @@ class JustraApp:
                     process_number = compact_process_number(row.get("process_number") or row.get("process_number_masked"))
                     if not process_number:
                         continue
-                    compact = self._compact_update_record(row)
                     event_key = self._update_event_key(row, process_number)
                     batch.append(
                         (
                             process_number,
                             event_key,
-                            json.dumps(compact, ensure_ascii=False, separators=(",", ":")),
+                            json.dumps(self._update_index_payload(row), ensure_ascii=False, separators=(",", ":")),
                         )
                     )
                     if len(batch) >= 1000:
@@ -4320,7 +4387,7 @@ class JustraApp:
                         except json.JSONDecodeError:
                             continue
                         if isinstance(payload, dict):
-                            updates.append(payload)
+                            updates.append(self._compact_update_record(payload))
         return updates
 
     def _update_index_source(self) -> dict[str, Any]:
