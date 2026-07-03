@@ -3334,7 +3334,23 @@ class JustraApp:
             fields.extend(["partes.nome", "partes.polo", "partes.advogados.nome", "partes.advogados.oab"])
         return fields
 
-    def _datajud_search(self, court: str, payload: dict[str, Any], timeout: int = 30) -> dict[str, Any]:
+    def _datajud_backend_overloaded(self, response: requests.Response | None) -> bool:
+        if response is None:
+            return False
+        if response.status_code not in {429, 500, 502, 503, 504}:
+            return False
+        preview = response.text[:4000].lower()
+        return "es_rejected_execution_exception" in preview or "rejected execution" in preview
+
+    def _datajud_search(
+        self,
+        court: str,
+        payload: dict[str, Any],
+        timeout: int = 90,
+        *,
+        retries: int = 0,
+        retry_delay: float = 15.0,
+    ) -> dict[str, Any]:
         court_key = str(court or "").lower()
         endpoint = DATAJUD_ENDPOINTS.get(court_key)
         if not endpoint:
@@ -3342,30 +3358,48 @@ class JustraApp:
         api_key = self._datajud_api_key()
         if not api_key:
             raise RuntimeError("DATAJUD_API_KEY não configurada")
-        response = requests.post(
-            endpoint,
-            json=payload,
-            headers={"Authorization": f"APIKey {api_key}"},
-            timeout=timeout,
-        )
+        response = None
+        for attempt in range(max(0, retries) + 1):
+            response = requests.post(
+                endpoint,
+                json=payload,
+                headers={
+                    "Authorization": f"APIKey {api_key}",
+                    "Accept": "application/json",
+                    "Content-Type": "application/json",
+                    "User-Agent": "Justra/0.1 contato@justra.com.br",
+                },
+                timeout=timeout,
+            )
+            if not self._datajud_backend_overloaded(response) or attempt >= retries:
+                break
+            time.sleep(retry_delay * (attempt + 1))
         response.raise_for_status()
         return response.json()
 
     def _datajud_process_query(self, process_number: str) -> dict[str, Any]:
-        formatted = format_process_number(process_number)
-        candidates = [process_number]
-        if formatted and formatted != process_number:
-            candidates.append(formatted)
+        compact = compact_process_number(process_number)
         return {
-            "size": 10,
+            "size": 3,
             "track_total_hits": True,
-            "_source": self._datajud_source_fields(include_parties=True),
+            "_source": self._datajud_source_fields(include_parties=False),
+            "query": {"term": {"numeroProcesso.keyword": compact}},
+        }
+
+    def _datajud_process_fallback_query(self, process_number: str) -> dict[str, Any]:
+        compact = compact_process_number(process_number)
+        formatted = format_process_number(compact)
+        return {
+            "size": 3,
+            "track_total_hits": True,
+            "_source": self._datajud_source_fields(include_parties=False),
             "query": {
                 "bool": {
                     "should": [
-                        *({"term": {"numeroProcesso.keyword": candidate}} for candidate in candidates),
-                        *({"term": {"numeroProcesso": candidate}} for candidate in candidates),
-                        *({"match_phrase": {"numeroProcesso": candidate}} for candidate in candidates),
+                        {"match_phrase": {"numeroProcesso": compact}},
+                        {"match_phrase": {"numeroProcesso": formatted}},
+                        {"term": {"numeroProcesso": compact}},
+                        {"term": {"numeroProcesso": formatted}},
                     ],
                     "minimum_should_match": 1,
                 }
@@ -3669,8 +3703,23 @@ class JustraApp:
             }
         else:
             try:
-                payload = self._datajud_search(court, self._datajud_process_query(process_number), timeout=30)
+                payload = self._datajud_search(
+                    court,
+                    self._datajud_process_query(process_number),
+                    timeout=90,
+                    retries=2,
+                    retry_delay=20,
+                )
                 hits = ((payload.get("hits") or {}).get("hits") or []) if isinstance(payload, dict) else []
+                if not hits:
+                    payload = self._datajud_search(
+                        court,
+                        self._datajud_process_fallback_query(process_number),
+                        timeout=90,
+                        retries=1,
+                        retry_delay=20,
+                    )
+                    hits = ((payload.get("hits") or {}).get("hits") or []) if isinstance(payload, dict) else []
                 if not hits:
                     record = {
                         "process_number": process_number,
@@ -3689,10 +3738,13 @@ class JustraApp:
                 status = "error"
                 response = getattr(exc, "response", None)
                 if getattr(response, "status_code", None) == 429:
-                    status = "rate_limited"
-                    cooldown_until = (
-                        datetime.now() + timedelta(minutes=DATAJUD_RATE_LIMIT_COOLDOWN_MINUTES)
-                    ).isoformat(timespec="seconds")
+                    if self._datajud_backend_overloaded(response):
+                        status = "error"
+                    else:
+                        status = "rate_limited"
+                        cooldown_until = (
+                            datetime.now() + timedelta(minutes=DATAJUD_RATE_LIMIT_COOLDOWN_MINUTES)
+                        ).isoformat(timespec="seconds")
                 previous_movements = (previous or {}).get("movements", [])
                 if previous_movements and status == "error":
                     status = "partial_error"
