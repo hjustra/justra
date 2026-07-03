@@ -4390,6 +4390,25 @@ class JustraApp:
                             updates.append(self._compact_update_record(payload))
         return updates
 
+    def warm_process_indexes(self) -> dict[str, Any]:
+        started = time.perf_counter()
+        update_source = self._update_index_source()
+        deadline_source = self._deadline_index_source()
+        update_count = 0
+        deadline_count = 0
+        for item in update_source.get("sources") or []:
+            if self._ensure_update_process_index(item):
+                update_count += 1
+        for item in deadline_source.get("sources") or []:
+            if self._ensure_deadline_process_index(item):
+                deadline_count += 1
+        return {
+            "ok": True,
+            "update_indexes": update_count,
+            "deadline_indexes": deadline_count,
+            "seconds": round(time.perf_counter() - started, 3),
+        }
+
     def _update_index_source(self) -> dict[str, Any]:
         active = _active_djen_manifests()
         if not active:

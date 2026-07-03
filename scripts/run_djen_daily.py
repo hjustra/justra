@@ -9,7 +9,7 @@ SCRIPTS_DIR = ROOT / "scripts"
 if str(SCRIPTS_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPTS_DIR))
 
-from serve_justra_app import _run_djen_collection  # noqa: E402
+from serve_justra_app import DEFAULT_DB, JustraApp, _run_djen_collection  # noqa: E402
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -18,6 +18,12 @@ def main(argv: list[str] | None = None) -> int:
     retry_pending = "--retry-pending" in args
     mode = "dry-run" if dry_run else ("retry-pending" if retry_pending else "daily")
     _run_djen_collection(mode=mode, dry_run=dry_run, retry_pending=retry_pending)
+    if not dry_run:
+        try:
+            result = JustraApp(DEFAULT_DB).warm_process_indexes()
+            print(f"[justra] índices de processos aquecidos após DJEN: {result}")
+        except Exception as exc:
+            print(f"[justra] não foi possível aquecer índices de processos após DJEN: {exc}")
     return 0
 
 
