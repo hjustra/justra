@@ -55,13 +55,19 @@ DJEN_CONTROL_PATH = APP_DATA_DIR / "djen_control.json"
 DJEN_RUNTIME_PATH = APP_DATA_DIR / "djen_runtime.json"
 DEADLINE_WATCH_PATH = APP_DATA_DIR / "deadline_watches.json"
 DATAJUD_MOVEMENTS_PATH = APP_DATA_DIR / "datajud_movements.json"
+DATAJUD_JOBS_PATH = APP_DATA_DIR / "datajud_jobs.json"
 PJE_EXTENSION_IMPORTS_PATH = APP_DATA_DIR / "pje_extension_imports.jsonl"
 ACTIVE_DEADLINE_LOOKBACK_DAYS = 30
 ACTIVE_UPDATE_LOOKBACK_DAYS = 30
 DATAJUD_REFRESH_HOURS = 6
 DATAJUD_ERROR_RETRY_MINUTES = 30
 DATAJUD_RATE_LIMIT_COOLDOWN_MINUTES = 60
-DATAJUD_REQUEST_SPACING_SECONDS = 2.0
+DATAJUD_REQUEST_SPACING_SECONDS = 10.0
+DATAJUD_WORKER_POLL_SECONDS = 5.0
+DATAJUD_JOB_STALE_LOCK_MINUTES = 20
+DATAJUD_JOB_BACKOFF_MINUTES = 15
+DATAJUD_JOB_MAX_BACKOFF_HOURS = 12
+DATAJUD_JOB_STATUS_ACTIVE = {"queued", "retry", "rate_limited", "running"}
 DATAJUD_LABOR_COURTS = [f"trt{number}" for number in range(1, 25)] + ["tst"]
 DATAJUD_ENDPOINTS = {
     **{
@@ -1724,13 +1730,23 @@ class JustraApp:
         self.update_cache: dict[str, Any] = {"signature": "", "data": None}
         self.datajud_lock = threading.Lock()
         self.datajud_movements = load_json_file(DATAJUD_MOVEMENTS_PATH, {"processes": {}, "lawyer_searches": []})
+        self.datajud_jobs = load_json_file(DATAJUD_JOBS_PATH, {"jobs": {}, "worker": {}})
         self.datajud_refreshing: set[str] = set()
+        self.datajud_worker_stop = threading.Event()
+        self.datajud_worker_thread: threading.Thread | None = None
+        self.datajud_worker_id = f"justra-{os.getpid()}-{secrets.token_hex(3)}"
         if not isinstance(self.datajud_movements, dict):
             self.datajud_movements = {"processes": {}, "lawyer_searches": []}
         if not isinstance(self.datajud_movements.get("processes"), dict):
             self.datajud_movements["processes"] = {}
         if not isinstance(self.datajud_movements.get("lawyer_searches"), list):
             self.datajud_movements["lawyer_searches"] = []
+        if not isinstance(self.datajud_jobs, dict):
+            self.datajud_jobs = {"jobs": {}, "worker": {}}
+        if not isinstance(self.datajud_jobs.get("jobs"), dict):
+            self.datajud_jobs["jobs"] = {}
+        if not isinstance(self.datajud_jobs.get("worker"), dict):
+            self.datajud_jobs["worker"] = {}
         self.audio_playback_lock = threading.Lock()
         self.audio_playback_tokens: dict[str, dict[str, Any]] = {}
         if not isinstance(self.cases, dict):
@@ -1787,6 +1803,7 @@ class JustraApp:
         self._load_legal_sources()
 
     def close(self) -> None:
+        self.datajud_worker_stop.set()
         self.con.close()
 
     def _load_users(self) -> dict[str, dict[str, Any]]:
@@ -3003,6 +3020,9 @@ class JustraApp:
     def _save_datajud_movements(self) -> None:
         save_json_file(DATAJUD_MOVEMENTS_PATH, self.datajud_movements)
 
+    def _save_datajud_jobs(self) -> None:
+        save_json_file(DATAJUD_JOBS_PATH, self.datajud_jobs)
+
     def _datajud_api_key(self) -> str:
         return os.getenv("DATAJUD_API_KEY", "").strip()
 
@@ -3028,6 +3048,259 @@ class JustraApp:
         if self.datajud_movements.get("rate_limit_until") or self.datajud_movements.get("last_rate_limit_at"):
             self.datajud_movements["rate_limit_until"] = ""
             self._save_datajud_movements()
+
+    def _parse_iso_datetime(self, value: Any) -> datetime | None:
+        raw = str(value or "").strip()
+        if not raw:
+            return None
+        try:
+            return datetime.fromisoformat(raw)
+        except ValueError:
+            return None
+
+    def _datajud_job_backoff_until(self, attempts: int) -> str:
+        exponent = max(0, min(int(attempts or 1) - 1, 6))
+        minutes = min(DATAJUD_JOB_BACKOFF_MINUTES * (2**exponent), DATAJUD_JOB_MAX_BACKOFF_HOURS * 60)
+        return (datetime.now() + timedelta(minutes=minutes)).isoformat(timespec="seconds")
+
+    def _datajud_active_job_counts_locked(self) -> Counter:
+        jobs = self.datajud_jobs.get("jobs") or {}
+        return Counter(
+            str(job.get("status") or "unknown")
+            for job in jobs.values()
+            if isinstance(job, dict) and str(job.get("status") or "") in DATAJUD_JOB_STATUS_ACTIVE
+        )
+
+    def _datajud_refreshing_processes_locked(self) -> list[str]:
+        jobs = self.datajud_jobs.get("jobs") or {}
+        running = [
+            str(job.get("process_number") or key)
+            for key, job in jobs.items()
+            if isinstance(job, dict) and str(job.get("status") or "") == "running"
+        ]
+        return sorted({*running, *self.datajud_refreshing})
+
+    def _unlock_stale_datajud_jobs_locked(self) -> None:
+        jobs = self.datajud_jobs.get("jobs") or {}
+        changed = False
+        now = datetime.now()
+        for job in jobs.values():
+            if not isinstance(job, dict) or job.get("status") != "running":
+                continue
+            locked_at = self._parse_iso_datetime(job.get("locked_at"))
+            if locked_at and now - locked_at <= timedelta(minutes=DATAJUD_JOB_STALE_LOCK_MINUTES):
+                continue
+            job["status"] = "retry"
+            job["locked_at"] = ""
+            job["locked_by"] = ""
+            job["next_run_at"] = now.isoformat(timespec="seconds")
+            job["updated_at"] = now_iso()
+            changed = True
+        if changed:
+            self._save_datajud_jobs()
+
+    def _enqueue_datajud_refresh(
+        self,
+        process_numbers: set[str],
+        *,
+        force: bool = False,
+        priority: int = 50,
+        reason: str = "refresh",
+    ) -> int:
+        wanted = sorted({compact_process_number(value) for value in process_numbers if compact_process_number(value)})
+        if not wanted:
+            return 0
+        queued = 0
+        with self.datajud_lock:
+            jobs = self.datajud_jobs.setdefault("jobs", {})
+            process_store = self.datajud_movements.get("processes") or {}
+            now_text = now_iso()
+            for process_number in wanted:
+                record = process_store.get(process_number) if isinstance(process_store.get(process_number), dict) else None
+                if not self._datajud_record_stale(record, force=force):
+                    continue
+                court = self._datajud_court_from_process(process_number)
+                existing = jobs.get(process_number) if isinstance(jobs.get(process_number), dict) else None
+                if existing and str(existing.get("status") or "") in DATAJUD_JOB_STATUS_ACTIVE:
+                    changed_existing = False
+                    old_priority = int(existing.get("priority") or 0)
+                    new_priority = max(old_priority, int(priority or 0))
+                    if new_priority != old_priority:
+                        existing["priority"] = new_priority
+                        changed_existing = True
+                    if bool(force) and not bool(existing.get("force")):
+                        existing["force"] = True
+                        changed_existing = True
+                    if reason and int(priority or 0) >= old_priority and existing.get("reason") != reason:
+                        existing["reason"] = reason
+                        changed_existing = True
+                    if court and existing.get("court") != court:
+                        existing["court"] = court
+                        changed_existing = True
+                    if existing.get("status") != "rate_limited":
+                        old_next_run = str(existing.get("next_run_at") or now_text)
+                        new_next_run = min(old_next_run, now_text)
+                        if new_next_run != old_next_run:
+                            existing["next_run_at"] = new_next_run
+                            changed_existing = True
+                    if changed_existing:
+                        existing["updated_at"] = now_text
+                        queued += 1
+                    continue
+                jobs[process_number] = {
+                    "id": hashlib.sha1(f"datajud:{process_number}".encode("utf-8")).hexdigest()[:18],
+                    "process_number": process_number,
+                    "process_number_masked": format_process_number(process_number),
+                    "court": court,
+                    "priority": int(priority or 0),
+                    "status": "queued",
+                    "reason": reason or "refresh",
+                    "force": bool(force),
+                    "attempts": int((existing or {}).get("attempts") or 0),
+                    "next_run_at": now_text,
+                    "locked_at": "",
+                    "locked_by": "",
+                    "last_error": "",
+                    "created_at": (existing or {}).get("created_at") or now_text,
+                    "updated_at": now_text,
+                }
+                queued += 1
+            if queued:
+                self.datajud_jobs.setdefault("worker", {})["last_enqueue_at"] = now_text
+                self._save_datajud_jobs()
+        return queued
+
+    def _claim_next_datajud_job(self) -> dict[str, Any] | None:
+        with self.datajud_lock:
+            self._unlock_stale_datajud_jobs_locked()
+            if self._datajud_rate_limited():
+                return None
+            now_dt = datetime.now()
+            jobs = self.datajud_jobs.get("jobs") or {}
+            ready: list[dict[str, Any]] = []
+            for job in jobs.values():
+                if not isinstance(job, dict):
+                    continue
+                status = str(job.get("status") or "")
+                if status not in {"queued", "retry", "rate_limited"}:
+                    continue
+                next_run = self._parse_iso_datetime(job.get("next_run_at")) or now_dt
+                if next_run > now_dt:
+                    continue
+                ready.append(job)
+            if not ready:
+                return None
+            ready.sort(
+                key=lambda job: (
+                    -int(job.get("priority") or 0),
+                    str(job.get("next_run_at") or ""),
+                    str(job.get("created_at") or ""),
+                )
+            )
+            job = ready[0]
+            process_number = compact_process_number(job.get("process_number"))
+            if not process_number:
+                job["status"] = "discarded"
+                job["updated_at"] = now_iso()
+                self._save_datajud_jobs()
+                return None
+            now_text = now_iso()
+            job["status"] = "running"
+            job["locked_at"] = now_text
+            job["locked_by"] = self.datajud_worker_id
+            job["updated_at"] = now_text
+            self.datajud_refreshing.add(process_number)
+            self.datajud_jobs.setdefault("worker", {})["last_claim_at"] = now_text
+            self._save_datajud_jobs()
+            return copy.deepcopy(job)
+
+    def _finish_datajud_job(self, job: dict[str, Any], record: dict[str, Any] | None, error: Exception | None = None) -> None:
+        process_number = compact_process_number(job.get("process_number"))
+        if not process_number:
+            return
+        record = record or {}
+        status = str(record.get("status") or ("error" if error else "unknown"))
+        with self.datajud_lock:
+            jobs = self.datajud_jobs.setdefault("jobs", {})
+            current = jobs.get(process_number) if isinstance(jobs.get(process_number), dict) else {}
+            attempts = int(current.get("attempts") or 0) + (1 if status not in {"ok", "not_found", "invalid_court"} else 0)
+            now_text = now_iso()
+            if error:
+                next_status = "retry"
+                next_run_at = self._datajud_job_backoff_until(attempts)
+                last_error = str(error)[:240]
+            elif status == "rate_limited":
+                next_status = "rate_limited"
+                next_run_at = self._datajud_cooldown_until() or self._datajud_job_backoff_until(attempts)
+                last_error = str(record.get("error") or "DataJud rate limited")[:240]
+            elif status in {"error", "partial_error", "not_configured", "unknown"}:
+                next_status = "retry"
+                next_run_at = self._datajud_job_backoff_until(attempts)
+                last_error = str(record.get("error") or status)[:240]
+            else:
+                next_status = "succeeded"
+                next_run_at = ""
+                last_error = ""
+            current.update(
+                {
+                    "process_number": process_number,
+                    "process_number_masked": format_process_number(process_number),
+                    "court": current.get("court") or self._datajud_court_from_process(process_number),
+                    "status": next_status,
+                    "attempts": attempts,
+                    "next_run_at": next_run_at,
+                    "locked_at": "",
+                    "locked_by": "",
+                    "last_error": last_error,
+                    "last_record_status": status,
+                    "last_finished_at": now_text,
+                    "updated_at": now_text,
+                    "force": False if next_status == "succeeded" else bool(current.get("force")),
+                }
+            )
+            jobs[process_number] = current
+            self.datajud_refreshing.discard(process_number)
+            self.datajud_jobs.setdefault("worker", {})["last_finish_at"] = now_text
+            self._save_datajud_jobs()
+
+    def _datajud_worker_loop(self) -> None:
+        while not self.datajud_worker_stop.is_set():
+            job = self._claim_next_datajud_job()
+            if not job:
+                self.datajud_worker_stop.wait(DATAJUD_WORKER_POLL_SECONDS)
+                continue
+            process_number = compact_process_number(job.get("process_number"))
+            try:
+                record = self._fetch_datajud_process(process_number, force=bool(job.get("force")))
+                self._finish_datajud_job(job, record)
+            except Exception as exc:  # noqa: BLE001
+                print(f"[justra] worker DataJud falhou para {format_process_number(process_number)}: {exc}")
+                self._finish_datajud_job(job, None, error=exc)
+            self.datajud_worker_stop.wait(DATAJUD_REQUEST_SPACING_SECONDS)
+
+    def start_datajud_worker(self) -> None:
+        if self.datajud_worker_thread and self.datajud_worker_thread.is_alive():
+            return
+        self.datajud_worker_stop.clear()
+        self.datajud_worker_thread = threading.Thread(
+            target=self._datajud_worker_loop,
+            name="datajud-job-worker",
+            daemon=True,
+        )
+        self.datajud_worker_thread.start()
+
+    def _datajud_job_snapshot(self) -> dict[str, Any]:
+        with self.datajud_lock:
+            counts = self._datajud_active_job_counts_locked()
+            refreshing = self._datajud_refreshing_processes_locked()
+            worker = copy.deepcopy(self.datajud_jobs.get("worker") or {})
+        queued = int(counts.get("queued", 0) + counts.get("retry", 0) + counts.get("rate_limited", 0))
+        return {
+            "queued": queued,
+            "refreshing": refreshing,
+            "status_counts": dict(counts),
+            "worker": worker,
+        }
 
     def _datajud_court_from_process(self, process_number: str) -> str:
         digits = compact_process_number(process_number)
@@ -3456,42 +3729,9 @@ class JustraApp:
         return records
 
     def _queue_datajud_refresh(self, process_numbers: set[str], force: bool = False) -> int:
-        wanted = sorted({compact_process_number(value) for value in process_numbers if compact_process_number(value)})
-        queued: list[str] = []
-        with self.datajud_lock:
-            if self._datajud_rate_limited():
-                return 0
-            process_store = self.datajud_movements.get("processes") or {}
-            for process_number in wanted:
-                if process_number in self.datajud_refreshing:
-                    continue
-                record = process_store.get(process_number) if isinstance(process_store.get(process_number), dict) else None
-                if not self._datajud_record_stale(record, force=force):
-                    continue
-                self.datajud_refreshing.add(process_number)
-                queued.append(process_number)
-        if not queued:
-            return 0
-
-        def worker(numbers: list[str]) -> None:
-            try:
-                for index, number in enumerate(numbers):
-                    with self.datajud_lock:
-                        if self._datajud_rate_limited():
-                            break
-                    try:
-                        self._fetch_datajud_process(number, force=force)
-                    except Exception as exc:  # noqa: BLE001
-                        print(f"[justra] falha ao atualizar DataJud {format_process_number(number)}: {exc}")
-                    if index < len(numbers) - 1:
-                        time.sleep(DATAJUD_REQUEST_SPACING_SECONDS)
-            finally:
-                with self.datajud_lock:
-                    for number in numbers:
-                        self.datajud_refreshing.discard(number)
-
-        threading.Thread(target=worker, args=(queued,), daemon=True).start()
-        return len(queued)
+        priority = 50 if force else 20
+        reason = "manual_refresh" if force else "periodic_refresh"
+        return self._enqueue_datajud_refresh(process_numbers, force=force, priority=priority, reason=reason)
 
     def _datajud_update_rows_for_processes(
         self,
@@ -3500,7 +3740,7 @@ class JustraApp:
         force: bool = False,
         queue_refresh: bool = True,
     ) -> dict[str, Any]:
-        queued = self._queue_datajud_refresh(process_numbers, force=force) if queue_refresh else 0
+        queued_now = self._queue_datajud_refresh(process_numbers, force=force) if queue_refresh else 0
         records = self._cached_datajud_records(process_numbers)
         rows: list[dict[str, Any]] = []
         for record in records:
@@ -3543,13 +3783,17 @@ class JustraApp:
                 )
         rows.sort(key=self._update_sort_key, reverse=True)
         status_counts = Counter(str(record.get("status") or "unknown") for record in records if isinstance(record, dict))
+        jobs = self._datajud_job_snapshot()
         return {
             "rows": rows,
             "records": records,
             "status_counts": dict(status_counts),
             "configured": bool(self._datajud_api_key()),
-            "queued": queued,
-            "refreshing": sorted(self.datajud_refreshing),
+            "queued": int(jobs.get("queued") or 0),
+            "queued_now": queued_now,
+            "refreshing": jobs.get("refreshing") or [],
+            "job_status_counts": jobs.get("status_counts") or {},
+            "worker": jobs.get("worker") or {},
             "rate_limited": self._datajud_rate_limited(),
             "cooldown_until": self._datajud_cooldown_until(),
         }
@@ -4188,7 +4432,9 @@ class JustraApp:
                 "datajud_status_counts": datajud.get("status_counts") or {},
                 "datajud_refresh_hours": DATAJUD_REFRESH_HOURS,
                 "datajud_queued": int(datajud.get("queued") or 0),
+                "datajud_queued_now": int(datajud.get("queued_now") or 0),
                 "datajud_refreshing": len(datajud.get("refreshing") or []),
+                "datajud_job_status_counts": datajud.get("job_status_counts") or {},
                 "datajud_rate_limited": bool(datajud.get("rate_limited")),
                 "datajud_cooldown_until": datajud.get("cooldown_until") or "",
             },
@@ -4203,7 +4449,10 @@ class JustraApp:
                 "status_counts": datajud.get("status_counts") or {},
                 "records": datajud.get("records") or [],
                 "queued": int(datajud.get("queued") or 0),
+                "queued_now": int(datajud.get("queued_now") or 0),
                 "refreshing": datajud.get("refreshing") or [],
+                "job_status_counts": datajud.get("job_status_counts") or {},
+                "worker": datajud.get("worker") or {},
                 "rate_limited": bool(datajud.get("rate_limited")),
                 "cooldown_until": datajud.get("cooldown_until") or "",
             },
@@ -9830,6 +10079,7 @@ def main() -> None:
     if not db_path.exists():
         raise RuntimeError(f"DuckDB não encontrado: {db_path}")
     app = JustraApp(db_path)
+    app.start_datajud_worker()
     server = ThreadingHTTPServer((args.host, args.port), make_handler(app))
     scheduler_stop = threading.Event()
     scheduler = threading.Thread(
@@ -9848,6 +10098,7 @@ def main() -> None:
     recovery.start()
     print(f"Justra App em http://{args.host}:{args.port}")
     print(f"DuckDB: {db_path}")
+    print("Worker DataJud persistente iniciado.")
     print("Coleta Falcão segura agendada diariamente às 12:30.")
     try:
         server.serve_forever()
