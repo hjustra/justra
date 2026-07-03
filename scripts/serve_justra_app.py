@@ -2637,7 +2637,7 @@ class JustraApp:
         return payload
 
     def _ensure_deadline_process_index(self, item: dict[str, Any]) -> Path | None:
-        signature = str(item.get("signature") or "")
+        signature = f"deadline-v2:{item.get('signature') or ''}"
         db_path = self._deadline_process_index_path(item)
         if signature and self._sqlite_meta_matches(db_path, signature):
             return db_path
@@ -4289,7 +4289,7 @@ class JustraApp:
         return payload
 
     def _ensure_update_process_index(self, item: dict[str, Any]) -> Path | None:
-        signature = str(item.get("signature") or "")
+        signature = f"update-v2:{item.get('signature') or ''}"
         db_path = self._update_process_index_path(item)
         if signature and self._sqlite_meta_matches(db_path, signature):
             return db_path
