@@ -13,6 +13,7 @@ import os
 import re
 import secrets
 import shutil
+import sqlite3
 import subprocess
 import sys
 import threading
@@ -1724,9 +1725,11 @@ class JustraApp:
         if not isinstance(self.deadline_watches, dict):
             self.deadline_watches = {}
         self.deadline_cache_lock = threading.Lock()
+        self.deadline_index_build_lock = threading.Lock()
         self.deadline_cache: dict[str, Any] = {"signature": "", "data": None}
         self.deadline_summary_cache: dict[str, Any] = {}
         self.update_cache_lock = threading.Lock()
+        self.update_index_build_lock = threading.Lock()
         self.update_cache: dict[str, Any] = {"signature": "", "data": None}
         self.datajud_lock = threading.Lock()
         self.datajud_movements = load_json_file(DATAJUD_MOVEMENTS_PATH, {"processes": {}, "lawyer_searches": []})
@@ -2551,6 +2554,156 @@ class JustraApp:
                 return DATA_ROOT.joinpath(*suffix_parts)
         return path
 
+    def _sqlite_meta_matches(self, db_path: Path, signature: str) -> bool:
+        if not db_path.exists():
+            return False
+        try:
+            with sqlite3.connect(f"file:{db_path}?mode=ro", uri=True) as conn:
+                row = conn.execute("SELECT value FROM meta WHERE key = 'signature'").fetchone()
+                return bool(row and row[0] == signature)
+        except sqlite3.Error:
+            return False
+
+    def _sqlite_chunks(self, values: set[str] | list[str], size: int = 600):
+        ordered = sorted({compact_process_number(value) for value in values if compact_process_number(value)})
+        for index in range(0, len(ordered), size):
+            yield ordered[index : index + size]
+
+    def _deadline_process_index_path(self, item: dict[str, Any]) -> Path:
+        manifest_path = Path(str(item.get("manifest_path") or ""))
+        return manifest_path.parent / "deadline_process_index.sqlite"
+
+    def _deadline_event_key(self, row: dict[str, Any], kind: str, process_number: str) -> str:
+        explicit = str(row.get("id") or row.get("publication_event_id") or row.get("communication_hash") or "")
+        if explicit:
+            return explicit
+        seed = json.dumps(
+            {
+                "kind": kind,
+                "process": process_number,
+                "date": row.get("due_date") or row.get("event_date") or "",
+                "type": row.get("document_type") or row.get("communication_type") or "",
+                "evidence": row.get("evidence") if isinstance(row.get("evidence"), dict) else {},
+            },
+            ensure_ascii=False,
+            sort_keys=True,
+        )
+        return hashlib.sha1(seed.encode("utf-8")).hexdigest()[:24]
+
+    def _ensure_deadline_process_index(self, item: dict[str, Any]) -> Path | None:
+        signature = str(item.get("signature") or "")
+        db_path = self._deadline_process_index_path(item)
+        if signature and self._sqlite_meta_matches(db_path, signature):
+            return db_path
+        with self.deadline_index_build_lock:
+            if signature and self._sqlite_meta_matches(db_path, signature):
+                return db_path
+            db_path.parent.mkdir(parents=True, exist_ok=True)
+            tmp_path = db_path.with_name(f".{db_path.name}.{os.getpid()}.tmp")
+            if tmp_path.exists():
+                tmp_path.unlink()
+            started = time.perf_counter()
+            conn = sqlite3.connect(tmp_path)
+            try:
+                conn.execute("PRAGMA journal_mode=OFF")
+                conn.execute("PRAGMA synchronous=OFF")
+                conn.execute("CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT NOT NULL)")
+                conn.execute(
+                    "CREATE TABLE rows ("
+                    "process_number TEXT NOT NULL, "
+                    "kind TEXT NOT NULL, "
+                    "event_key TEXT NOT NULL, "
+                    "target_date TEXT NOT NULL, "
+                    "payload TEXT NOT NULL, "
+                    "PRIMARY KEY (process_number, kind, event_key)"
+                    ")"
+                )
+                conn.execute("CREATE INDEX rows_process_kind_date ON rows(process_number, kind, target_date)")
+                batch: list[tuple[str, str, str, str, str]] = []
+                total = 0
+                for kind, path_key, target_field in (
+                    ("deadline", "deadline_path", "due_date"),
+                    ("calendar", "calendar_path", "event_date"),
+                ):
+                    path = item.get(path_key)
+                    if not isinstance(path, Path):
+                        path = Path(str(path or ""))
+                    for row in iter_jsonl(path):
+                        process_number = compact_process_number(row.get("process_number") or row.get("process_number_masked"))
+                        target_date = str(row.get(target_field) or "")
+                        if not process_number or not parse_date_yyyy_mm_dd(target_date):
+                            continue
+                        compact = self._compact_deadline_record(row, kind)
+                        event_key = self._deadline_event_key(row, kind, process_number)
+                        batch.append(
+                            (
+                                process_number,
+                                kind,
+                                event_key,
+                                target_date,
+                                json.dumps(compact, ensure_ascii=False, separators=(",", ":")),
+                            )
+                        )
+                        if len(batch) >= 1000:
+                            conn.executemany(
+                                "INSERT OR REPLACE INTO rows(process_number, kind, event_key, target_date, payload) VALUES (?, ?, ?, ?, ?)",
+                                batch,
+                            )
+                            total += len(batch)
+                            batch = []
+                if batch:
+                    conn.executemany(
+                        "INSERT OR REPLACE INTO rows(process_number, kind, event_key, target_date, payload) VALUES (?, ?, ?, ?, ?)",
+                        batch,
+                    )
+                    total += len(batch)
+                conn.execute("INSERT INTO meta(key, value) VALUES ('signature', ?)", (signature,))
+                conn.execute("INSERT INTO meta(key, value) VALUES ('built_at', ?)", (now_iso(),))
+                conn.execute("INSERT INTO meta(key, value) VALUES ('rows', ?)", (str(total),))
+                conn.commit()
+            finally:
+                conn.close()
+            os.replace(tmp_path, db_path)
+            print(f"[justra] índice de prazos DJEN atualizado: {db_path} ({total} linhas em {time.perf_counter() - started:.1f}s)")
+        return db_path
+
+    def _load_deadline_rows_from_process_indexes(self, source: dict[str, Any], wanted: set[str]) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+        deadlines: list[dict[str, Any]] = []
+        calendars: list[dict[str, Any]] = []
+        seen: set[tuple[str, str]] = set()
+        today_text = date.today().isoformat()
+        if not wanted:
+            return deadlines, calendars
+        for item in source.get("sources") or []:
+            db_path = self._ensure_deadline_process_index(item)
+            if not db_path or not db_path.exists():
+                continue
+            with sqlite3.connect(f"file:{db_path}?mode=ro", uri=True) as conn:
+                conn.row_factory = sqlite3.Row
+                for chunk in self._sqlite_chunks(wanted):
+                    if not chunk:
+                        continue
+                    placeholders = ",".join("?" for _ in chunk)
+                    for kind, target in (("deadline", deadlines), ("calendar", calendars)):
+                        rows = conn.execute(
+                            f"SELECT kind, event_key, payload FROM rows "
+                            f"WHERE kind = ? AND target_date >= ? AND process_number IN ({placeholders})",
+                            [kind, today_text, *chunk],
+                        )
+                        for row in rows:
+                            key = (str(row["kind"] or ""), str(row["event_key"] or ""))
+                            if key[1] and key in seen:
+                                continue
+                            if key[1]:
+                                seen.add(key)
+                            try:
+                                payload = json.loads(row["payload"])
+                            except json.JSONDecodeError:
+                                continue
+                            if isinstance(payload, dict):
+                                target.append(payload)
+        return deadlines, calendars
+
     def _deadline_index_source(self) -> dict[str, Any]:
         active = _active_deadline_manifests()
         if not active:
@@ -2558,14 +2711,18 @@ class JustraApp:
         sources = []
         for manifest_path, manifest, target_date in active:
             outputs = manifest.get("outputs") if isinstance(manifest.get("outputs"), dict) else {}
+            deadline_path = self._deadline_output_path(outputs.get("deadline_candidates"))
+            calendar_path = self._deadline_output_path(outputs.get("calendar_event_candidates"))
+            deadline_mtime = deadline_path.stat().st_mtime_ns if deadline_path.exists() else 0
+            calendar_mtime = calendar_path.stat().st_mtime_ns if calendar_path.exists() else 0
             sources.append(
                 {
                     "manifest": manifest,
                     "manifest_path": str(manifest_path),
                     "target_date": target_date.isoformat(),
-                    "signature": f"{manifest_path}:{manifest_path.stat().st_mtime_ns}",
-                    "deadline_path": self._deadline_output_path(outputs.get("deadline_candidates")),
-                    "calendar_path": self._deadline_output_path(outputs.get("calendar_event_candidates")),
+                    "signature": f"{manifest_path}:{manifest_path.stat().st_mtime_ns}:{deadline_path}:{deadline_mtime}:{calendar_path}:{calendar_mtime}",
+                    "deadline_path": deadline_path,
+                    "calendar_path": calendar_path,
                 }
             )
         latest = sources[0]
@@ -2762,28 +2919,32 @@ class JustraApp:
         calendars: list[dict[str, Any]] = []
         seen: set[tuple[str, str]] = set()
         if wanted:
-            today = date.today()
-            for item in source["sources"]:
-                for row in iter_jsonl(item["deadline_path"]):
-                    process_number = compact_process_number(row.get("process_number") or row.get("process_number_masked"))
-                    if process_number not in wanted or not self._deadline_raw_row_is_active(row, "deadline", today):
-                        continue
-                    key = ("deadline", str(row.get("id") or row.get("publication_event_id") or row.get("communication_hash") or ""))
-                    if key[1] and key in seen:
-                        continue
-                    if key[1]:
-                        seen.add(key)
-                    deadlines.append(self._compact_deadline_record(row, "deadline"))
-                for row in iter_jsonl(item["calendar_path"]):
-                    process_number = compact_process_number(row.get("process_number") or row.get("process_number_masked"))
-                    if process_number not in wanted or not self._deadline_raw_row_is_active(row, "calendar", today):
-                        continue
-                    key = ("calendar", str(row.get("id") or row.get("publication_event_id") or row.get("communication_hash") or ""))
-                    if key[1] and key in seen:
-                        continue
-                    if key[1]:
-                        seen.add(key)
-                    calendars.append(self._compact_deadline_record(row, "calendar"))
+            try:
+                deadlines, calendars = self._load_deadline_rows_from_process_indexes(source, wanted)
+            except (OSError, sqlite3.Error) as exc:
+                print(f"[justra] índice de prazos indisponível; usando varredura JSONL: {exc}")
+                today = date.today()
+                for item in source["sources"]:
+                    for row in iter_jsonl(item["deadline_path"]):
+                        process_number = compact_process_number(row.get("process_number") or row.get("process_number_masked"))
+                        if process_number not in wanted or not self._deadline_raw_row_is_active(row, "deadline", today):
+                            continue
+                        key = ("deadline", str(row.get("id") or row.get("publication_event_id") or row.get("communication_hash") or ""))
+                        if key[1] and key in seen:
+                            continue
+                        if key[1]:
+                            seen.add(key)
+                        deadlines.append(self._compact_deadline_record(row, "deadline"))
+                    for row in iter_jsonl(item["calendar_path"]):
+                        process_number = compact_process_number(row.get("process_number") or row.get("process_number_masked"))
+                        if process_number not in wanted or not self._deadline_raw_row_is_active(row, "calendar", today):
+                            continue
+                        key = ("calendar", str(row.get("id") or row.get("publication_event_id") or row.get("communication_hash") or ""))
+                        if key[1] and key in seen:
+                            continue
+                        if key[1]:
+                            seen.add(key)
+                        calendars.append(self._compact_deadline_record(row, "calendar"))
         deadlines.sort(key=self._deadline_sort_key)
         calendars.sort(key=self._deadline_sort_key)
         return {
@@ -4036,6 +4197,132 @@ class JustraApp:
     def _djen_publication_path(self, manifest_path: Path) -> Path:
         return manifest_path.parent / "publication_events.jsonl.gz"
 
+    def _update_process_index_path(self, item: dict[str, Any]) -> Path:
+        publication_path = item.get("publication_path")
+        if not isinstance(publication_path, Path):
+            publication_path = Path(str(publication_path or ""))
+        return publication_path.with_name("publication_events.process_index.sqlite")
+
+    def _update_event_key(self, row: dict[str, Any], process_number: str) -> str:
+        explicit = str(row.get("communication_id") or row.get("communication_hash") or "")
+        if explicit:
+            return explicit
+        seed = json.dumps(
+            {
+                "process": process_number,
+                "date": row.get("publication_date") or row.get("sent_date") or "",
+                "document_type": row.get("document_type") or "",
+                "communication_type": row.get("communication_type") or "",
+                "text": clean_legal_text(row.get("text") or "")[:240],
+            },
+            ensure_ascii=False,
+            sort_keys=True,
+        )
+        return hashlib.sha1(seed.encode("utf-8")).hexdigest()[:24]
+
+    def _ensure_update_process_index(self, item: dict[str, Any]) -> Path | None:
+        signature = str(item.get("signature") or "")
+        db_path = self._update_process_index_path(item)
+        if signature and self._sqlite_meta_matches(db_path, signature):
+            return db_path
+        with self.update_index_build_lock:
+            if signature and self._sqlite_meta_matches(db_path, signature):
+                return db_path
+            publication_path = item.get("publication_path")
+            if not isinstance(publication_path, Path):
+                publication_path = Path(str(publication_path or ""))
+            if not publication_path.exists():
+                return None
+            db_path.parent.mkdir(parents=True, exist_ok=True)
+            tmp_path = db_path.with_name(f".{db_path.name}.{os.getpid()}.tmp")
+            if tmp_path.exists():
+                tmp_path.unlink()
+            started = time.perf_counter()
+            conn = sqlite3.connect(tmp_path)
+            try:
+                conn.execute("PRAGMA journal_mode=OFF")
+                conn.execute("PRAGMA synchronous=OFF")
+                conn.execute("CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT NOT NULL)")
+                conn.execute(
+                    "CREATE TABLE updates ("
+                    "process_number TEXT NOT NULL, "
+                    "event_key TEXT NOT NULL, "
+                    "payload TEXT NOT NULL, "
+                    "PRIMARY KEY (process_number, event_key)"
+                    ")"
+                )
+                conn.execute("CREATE INDEX updates_process ON updates(process_number)")
+                batch: list[tuple[str, str, str]] = []
+                total = 0
+                for row in iter_jsonl(publication_path):
+                    process_number = compact_process_number(row.get("process_number") or row.get("process_number_masked"))
+                    if not process_number:
+                        continue
+                    compact = self._compact_update_record(row)
+                    event_key = self._update_event_key(row, process_number)
+                    batch.append(
+                        (
+                            process_number,
+                            event_key,
+                            json.dumps(compact, ensure_ascii=False, separators=(",", ":")),
+                        )
+                    )
+                    if len(batch) >= 1000:
+                        conn.executemany(
+                            "INSERT OR REPLACE INTO updates(process_number, event_key, payload) VALUES (?, ?, ?)",
+                            batch,
+                        )
+                        total += len(batch)
+                        batch = []
+                if batch:
+                    conn.executemany(
+                        "INSERT OR REPLACE INTO updates(process_number, event_key, payload) VALUES (?, ?, ?)",
+                        batch,
+                    )
+                    total += len(batch)
+                conn.execute("INSERT INTO meta(key, value) VALUES ('signature', ?)", (signature,))
+                conn.execute("INSERT INTO meta(key, value) VALUES ('built_at', ?)", (now_iso(),))
+                conn.execute("INSERT INTO meta(key, value) VALUES ('rows', ?)", (str(total),))
+                conn.commit()
+            finally:
+                conn.close()
+            os.replace(tmp_path, db_path)
+            print(f"[justra] índice de publicações DJEN atualizado: {db_path} ({total} linhas em {time.perf_counter() - started:.1f}s)")
+        return db_path
+
+    def _load_update_rows_from_process_indexes(self, source: dict[str, Any], wanted: set[str]) -> list[dict[str, Any]]:
+        updates: list[dict[str, Any]] = []
+        seen: set[str] = set()
+        if not wanted:
+            return updates
+        for item in source.get("sources") or []:
+            db_path = self._ensure_update_process_index(item)
+            if not db_path or not db_path.exists():
+                continue
+            with sqlite3.connect(f"file:{db_path}?mode=ro", uri=True) as conn:
+                conn.row_factory = sqlite3.Row
+                for chunk in self._sqlite_chunks(wanted):
+                    if not chunk:
+                        continue
+                    placeholders = ",".join("?" for _ in chunk)
+                    rows = conn.execute(
+                        f"SELECT process_number, event_key, payload FROM updates WHERE process_number IN ({placeholders})",
+                        chunk,
+                    )
+                    for row in rows:
+                        key = str(row["event_key"] or "")
+                        if key and key in seen:
+                            continue
+                        if key:
+                            seen.add(key)
+                        try:
+                            payload = json.loads(row["payload"])
+                        except json.JSONDecodeError:
+                            continue
+                        if isinstance(payload, dict):
+                            updates.append(payload)
+        return updates
+
     def _update_index_source(self) -> dict[str, Any]:
         active = _active_djen_manifests()
         if not active:
@@ -4357,20 +4644,24 @@ class JustraApp:
         updates: list[dict[str, Any]] = []
         seen: set[str] = set()
         if wanted:
-            for item in source["sources"]:
-                for row in iter_jsonl(item["publication_path"]):
-                    process_number = compact_process_number(row.get("process_number") or row.get("process_number_masked"))
-                    if process_number not in wanted:
-                        continue
-                    key = str(
-                        row.get("communication_id")
-                        or row.get("communication_hash")
-                        or f"{process_number}:{row.get('publication_date')}:{row.get('document_type')}:{row.get('text')}"
-                    )
-                    if key in seen:
-                        continue
-                    seen.add(key)
-                    updates.append(self._compact_update_record(row))
+            try:
+                updates = self._load_update_rows_from_process_indexes(source, wanted)
+            except (OSError, sqlite3.Error) as exc:
+                print(f"[justra] índice de publicações indisponível; usando varredura JSONL: {exc}")
+                for item in source["sources"]:
+                    for row in iter_jsonl(item["publication_path"]):
+                        process_number = compact_process_number(row.get("process_number") or row.get("process_number_masked"))
+                        if process_number not in wanted:
+                            continue
+                        key = str(
+                            row.get("communication_id")
+                            or row.get("communication_hash")
+                            or f"{process_number}:{row.get('publication_date')}:{row.get('document_type')}:{row.get('text')}"
+                        )
+                        if key in seen:
+                            continue
+                        seen.add(key)
+                        updates.append(self._compact_update_record(row))
         updates.sort(key=self._update_sort_key, reverse=True)
         data = {
             "manifest": source["manifest"],
