@@ -1,0 +1,210 @@
+.justra-pje-root,
+.justra-pje-root * {
+  box-sizing: border-box;
+  font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+}
+
+.justra-pje-button {
+  position: fixed;
+  right: 18px;
+  bottom: 18px;
+  z-index: 2147483646;
+  border: 0;
+  border-radius: 8px;
+  background: #113c38;
+  color: #ffffff;
+  box-shadow: 0 14px 36px rgba(14, 31, 34, 0.26);
+  cursor: pointer;
+  font-size: 13px;
+  font-weight: 750;
+  letter-spacing: 0;
+  min-height: 42px;
+  padding: 0 14px;
+}
+
+.justra-pje-button:hover {
+  background: #0b2c29;
+}
+
+.justra-pje-panel {
+  position: fixed;
+  right: 18px;
+  bottom: 70px;
+  z-index: 2147483647;
+  width: min(380px, calc(100vw - 32px));
+  max-height: min(620px, calc(100vh - 100px));
+  overflow: auto;
+  border: 1px solid rgba(16, 24, 40, 0.14);
+  border-radius: 8px;
+  background: #ffffff;
+  color: #182230;
+  box-shadow: 0 22px 70px rgba(16, 24, 40, 0.24);
+}
+
+.justra-pje-panel[hidden],
+.justra-pje-button[hidden] {
+  display: none !important;
+}
+
+.justra-pje-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 14px 14px 10px;
+  border-bottom: 1px solid rgba(16, 24, 40, 0.1);
+}
+
+.justra-pje-title {
+  margin: 0;
+  color: #101828;
+  font-size: 15px;
+  font-weight: 800;
+  letter-spacing: 0;
+  line-height: 1.25;
+}
+
+.justra-pje-subtitle {
+  margin: 3px 0 0;
+  color: #52606d;
+  font-size: 12px;
+  line-height: 1.35;
+}
+
+.justra-pje-close {
+  display: grid;
+  width: 30px;
+  height: 30px;
+  place-items: center;
+  border: 1px solid rgba(16, 24, 40, 0.14);
+  border-radius: 6px;
+  background: #ffffff;
+  color: #344054;
+  cursor: pointer;
+  font-size: 18px;
+  line-height: 1;
+}
+
+.justra-pje-body {
+  display: grid;
+  gap: 12px;
+  padding: 14px;
+}
+
+.justra-pje-status {
+  border: 1px solid rgba(21, 112, 239, 0.16);
+  border-radius: 8px;
+  background: #eff8ff;
+  color: #1849a9;
+  font-size: 12px;
+  line-height: 1.4;
+  padding: 10px;
+}
+
+.justra-pje-status[data-kind="warning"] {
+  border-color: rgba(181, 71, 8, 0.18);
+  background: #fffaeb;
+  color: #93370d;
+}
+
+.justra-pje-status[data-kind="success"] {
+  border-color: rgba(7, 148, 85, 0.18);
+  background: #ecfdf3;
+  color: #067647;
+}
+
+.justra-pje-status[data-kind="error"] {
+  border-color: rgba(180, 35, 24, 0.18);
+  background: #fef3f2;
+  color: #b42318;
+}
+
+.justra-pje-actions {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+}
+
+.justra-pje-action {
+  min-height: 38px;
+  border: 1px solid rgba(16, 24, 40, 0.16);
+  border-radius: 8px;
+  background: #ffffff;
+  color: #182230;
+  cursor: pointer;
+  font-size: 12px;
+  font-weight: 750;
+  letter-spacing: 0;
+  padding: 0 10px;
+}
+
+.justra-pje-action:hover {
+  background: #f8fafc;
+}
+
+.justra-pje-action[data-primary="true"] {
+  border-color: #113c38;
+  background: #113c38;
+  color: #ffffff;
+}
+
+.justra-pje-action[data-primary="true"]:hover {
+  background: #0b2c29;
+}
+
+.justra-pje-summary {
+  display: grid;
+  gap: 8px;
+}
+
+.justra-pje-card {
+  border: 1px solid rgba(16, 24, 40, 0.12);
+  border-radius: 8px;
+  background: #ffffff;
+  padding: 10px;
+}
+
+.justra-pje-label {
+  margin: 0 0 3px;
+  color: #667085;
+  font-size: 11px;
+  font-weight: 750;
+  letter-spacing: 0;
+  text-transform: uppercase;
+}
+
+.justra-pje-value {
+  margin: 0;
+  color: #182230;
+  font-size: 12px;
+  line-height: 1.4;
+  overflow-wrap: anywhere;
+}
+
+.justra-pje-list {
+  display: grid;
+  gap: 6px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.justra-pje-list li {
+  color: #344054;
+  font-size: 12px;
+  line-height: 1.35;
+  overflow-wrap: anywhere;
+}
+
+@media (max-width: 520px) {
+  .justra-pje-panel {
+    right: 10px;
+    bottom: 64px;
+    width: calc(100vw - 20px);
+  }
+
+  .justra-pje-button {
+    right: 10px;
+    bottom: 12px;
+  }
+}

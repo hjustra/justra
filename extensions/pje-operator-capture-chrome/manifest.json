@@ -1,0 +1,47 @@
+{
+  "manifest_version": 3,
+  "name": "Justra PJe Operator Capture",
+  "version": "0.1.0",
+  "description": "Extensão local de operador para autoenviar páginas PJe liberadas manualmente para a Justra.",
+  "icons": {
+    "128": "icons/justra-128.png"
+  },
+  "permissions": [
+    "activeTab",
+    "scripting",
+    "storage"
+  ],
+  "host_permissions": [
+    "https://pje.trt2.jus.br/*",
+    "https://justra.com.br/*",
+    "https://staging.justra.com.br/*",
+    "http://127.0.0.1:8787/*",
+    "http://localhost:8787/*"
+  ],
+  "action": {
+    "default_title": "Justra PJe Operador",
+    "default_popup": "popup.html",
+    "default_icon": {
+      "128": "icons/justra-128.png"
+    }
+  },
+  "background": {
+    "service_worker": "background.js",
+    "type": "module"
+  },
+  "content_scripts": [
+    {
+      "matches": [
+        "https://pje.trt2.jus.br/*"
+      ],
+      "js": [
+        "content.js"
+      ],
+      "css": [
+        "content.css"
+      ],
+      "all_frames": true,
+      "run_at": "document_idle"
+    }
+  ]
+}
