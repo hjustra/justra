@@ -1733,9 +1733,9 @@ async function runBackfill(startDate, endDate) {
 
 function pjeJobStatusLabel(status) {
   return {
-    queued: "Aguardando aprovação",
-    operator_requested: "Aprovado para agente",
-    operator_running: "Em execução local",
+    queued: "Na fila",
+    operator_requested: "Na fila",
+    operator_running: "Executando",
     retry_wait: "Aguardando retry",
     succeeded: "Concluído",
     manual_required: "Manual necessário",
@@ -1757,9 +1757,6 @@ function pjeJobReasonLabel(reason) {
 function pjeJobActionButtons(job = {}) {
   const status = String(job.status || "");
   const id = escapeHtml(job.id || "");
-  const approve = status === "queued" || status === "retry_wait" || status === "failed" || status === "manual_required"
-    ? `<button type="button" data-pje-job-action="approve" data-pje-job-id="${id}">Aprovar</button>`
-    : "";
   const retry = status === "failed" || status === "manual_required" || status === "retry_wait"
     ? `<button type="button" data-pje-job-action="retry" data-pje-job-id="${id}">Reenfileirar</button>`
     : "";
@@ -1769,37 +1766,37 @@ function pjeJobActionButtons(job = {}) {
   const cancel = !["succeeded", "cancelled"].includes(status)
     ? `<button type="button" class="danger" data-pje-job-action="cancel" data-pje-job-id="${id}">Cancelar</button>`
     : "";
-  return [approve, retry, manual, cancel].filter(Boolean).join("");
+  return [retry, manual, cancel].filter(Boolean).join("");
 }
 
 function renderPjeOperator(data) {
   state.pjeOperator = data;
   const summary = data.summary || {};
   const active = Number(summary.active || 0);
-  const approved = Number(summary.approved || 0);
+  const ready = Number(summary.ready || 0) || Number(summary.queued || 0) + Number(summary.approved || 0);
   const running = Number(summary.running || 0);
-  $("#navPjeState").textContent = running ? "executando" : approved ? `${fmt(approved)} aprov.` : active ? `${fmt(active)} pend.` : "ok";
+  $("#navPjeState").textContent = running ? "executando" : ready ? `${fmt(ready)} fila` : active ? `${fmt(active)} pend.` : "ok";
   $("#pjeOperatorState").textContent = running
-    ? "Agente executando coleta"
-    : approved
-      ? "Jobs aprovados aguardando agente local"
+    ? "Worker executando coleta"
+    : ready
+      ? "Jobs aguardando worker"
       : active
-        ? "Jobs aguardando aprovação"
+        ? "Jobs ativos"
         : "Fila sem pendências";
   $("#pjeOperatorLight").className = `collector-light ${running ? "running" : active ? "enabled" : "stopped"}`;
   $("#pjeOperatorNote").textContent = data.operator?.token_configured
-    ? "Token de operador configurado. O agente local pode puxar jobs aprovados."
-    : "Configure JUSTRA_PJE_OPERATOR_TOKEN no staging ou rode o agente com um token admin.";
-  const command = data.operator?.agent_command || ".venv/bin/python scripts/pje_operator_agent.py --justra-url https://staging.justra.com.br";
+    ? "Token configurado. O worker consome automaticamente os jobs PJe enfileirados."
+    : "Configure JUSTRA_PJE_OPERATOR_TOKEN no ambiente do worker para consumir a fila.";
+  const command = data.operator?.agent_command || ".venv/bin/python scripts/pje_operator_agent.py --justra-url http://127.0.0.1:8787 --headless";
   $("#pjeAgentCommand").textContent = command;
   $("#pjeOperatorTokenHint").textContent = data.operator?.token_configured
-    ? "No Mac, exporte JUSTRA_PJE_OPERATOR_TOKEN antes de rodar o agente."
-    : "Sem token de operador configurado; o agente aceita um token admin via --token.";
+    ? "Em produção/staging, este comando roda como serviço systemd separado do servidor web."
+    : "Sem token de operador configurado; o worker aceita um token admin via --token apenas para teste.";
   renderCards($("#pjeOperatorCards"), [
-    { label: "Ativos", value: fmt(summary.active), note: "fila + aprovados + execução" },
-    { label: "Aguardando", value: fmt(summary.queued), note: "precisam aprovação" },
-    { label: "Aprovados", value: fmt(summary.approved), note: "agente pode executar" },
-    { label: "Executando", value: fmt(summary.running), note: "Chrome local" },
+    { label: "Ativos", value: fmt(summary.active), note: "fila + retry + execução" },
+    { label: "Na fila", value: fmt(ready), note: "worker pode executar" },
+    { label: "Retry", value: fmt(summary.retry_wait), note: "aguardando nova tentativa" },
+    { label: "Executando", value: fmt(summary.running), note: "coletor headless" },
     { label: "Concluídos", value: fmt(summary.succeeded), note: "captura aplicada" },
     { label: "Falhas", value: fmt(Number(summary.failed || 0) + Number(summary.manual_required || 0)), note: "revisão/manual" },
   ]);
@@ -2662,10 +2659,10 @@ async function waitForPjeAssistedJob(caseItem = {}, statusSelector = "#processCe
     const status = String(job.status || "");
     if (statusEl) {
       statusEl.textContent = status === "operator_running"
-        ? "Operador coletando PJe agora. Aguarde mais um instante..."
-        : status === "operator_requested"
-          ? "Coleta PJe aprovada; aguardando agente local."
-          : "Coleta PJe na fila assistida. Se passar de 1 minuto, abriremos o fluxo manual.";
+        ? "Worker PJe coletando agora. Aguarde mais um instante..."
+        : status === "retry_wait"
+          ? "Coleta PJe falhou e ficou agendada para retry automático."
+          : "Coleta PJe na fila automática. Você pode acompanhar em PJe operador.";
     }
     if (status === "succeeded") return true;
     if (["manual_required", "failed", "cancelled"].includes(status)) return false;
@@ -2944,26 +2941,22 @@ async function addProcessCenterProcess() {
     return;
   }
   const pjeUrl = officialPjeUrlForProcessNumber(processNumber);
-  $("#processCenterStatus").textContent = "Cadastrando processo e colocando PJe na fila assistida...";
+  $("#processCenterStatus").textContent = "Cadastrando processo e colocando PJe na fila automática...";
   const caseItem = await ensureProcessCenterCase(processNumber, { process_source_url: pjeUrl });
   await api("/api/updates/watch", {
     method: "POST",
     body: JSON.stringify({ process_number: processNumber }),
   }).catch(() => {});
   input.value = "";
-  $("#processCenterStatus").textContent = "Processo cadastrado. Estamos tentando a coleta PJe assistida por até 1 minuto; DJEN/DataJud seguem em paralelo.";
+  $("#processCenterStatus").textContent = "Processo cadastrado. O worker PJe tentará coletar em segundo plano; DJEN/DataJud seguem em paralelo.";
   await loadProcessCenter({ refreshDatajud: true });
   const collected = await waitForPjeAssistedJob(caseItem);
   if (collected) {
-    $("#processCenterStatus").textContent = "PJe coletado pelo operador. Atualizando o processo...";
+    $("#processCenterStatus").textContent = "PJe coletado pelo worker. Atualizando o processo...";
     await loadProcessCenter().catch(() => {});
     return;
   }
-  const opened = pjeUrl ? window.open(pjeUrl, "_blank") : null;
-  if (opened) opened.opener = null;
-  $("#processCenterStatus").textContent = opened
-    ? "Não concluímos a coleta assistida em 1 minuto. PJe aberto para fluxo manual com extensão."
-    : "Não concluímos a coleta assistida em 1 minuto. Use o botão Coletar PJe para abrir o fluxo manual.";
+  $("#processCenterStatus").textContent = "PJe segue na fila automática. Acompanhe tentativas e erros em PJe operador.";
   window.setTimeout(() => loadProcessCenter().catch(() => {}), 5000);
 }
 
@@ -2984,19 +2977,15 @@ async function openPjeCollectionForCase(caseId) {
     renderCaseWorkspace();
   }
   await loadProcessCenter().catch(() => {});
-  $("#processCenterStatus").textContent = "Recoleta PJe enviada para a fila assistida. Aguardando até 1 minuto antes do fallback manual.";
+  $("#processCenterStatus").textContent = "Recoleta PJe enviada para a fila automática. Aguardando uma tentativa rápida do worker.";
   const collected = await waitForPjeAssistedJob(data.case || caseItem);
   if (collected) {
-    $("#processCenterStatus").textContent = "Recoleta PJe concluída pelo operador.";
+    $("#processCenterStatus").textContent = "Recoleta PJe concluída pelo worker.";
     await loadProcessCenter().catch(() => {});
     if (state.selectedCase?.id === caseItem.id) await refreshSelectedCase(caseItem.id);
     return;
   }
-  const opened = window.open(pjeUrl, "_blank");
-  if (opened) opened.opener = null;
-  $("#processCenterStatus").textContent = opened
-    ? "Coleta assistida não concluiu em 1 minuto. PJe aberto para fluxo manual com extensão."
-    : "O navegador bloqueou a aba. Abra o link oficial pelo dossiê e envie pela extensão Justra PJe.";
+  $("#processCenterStatus").textContent = "Recoleta PJe continua na fila automática. Acompanhe o job em PJe operador.";
 }
 
 async function openCaseFromCenter(caseId, preferredTab = "overview") {

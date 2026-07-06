@@ -72,6 +72,7 @@ fi
 run_as_justra python3 -m venv "${APP_DIR}/.venv"
 run_as_justra "${APP_DIR}/.venv/bin/python" -m pip install --upgrade pip
 run_as_justra "${APP_DIR}/.venv/bin/pip" install -r "${APP_DIR}/requirements.txt"
+run_as_justra "${APP_DIR}/.venv/bin/python" -m playwright install chromium
 
 if [[ ! -f "${NODE_RUNTIME_DIR}/package.json" ]]; then
   run_as_justra_in "${NODE_RUNTIME_DIR}" npm init -y
@@ -88,6 +89,7 @@ if [[ ! -f /etc/justra/justra.env ]]; then
 fi
 
 install -m 644 "${APP_DIR}/deploy/systemd/justra.service" /etc/systemd/system/justra.service
+install -m 644 "${APP_DIR}/deploy/systemd/justra-pje-worker.service" /etc/systemd/system/justra-pje-worker.service
 install -m 644 "${APP_DIR}/deploy/systemd/justra-djen-daily.service" /etc/systemd/system/justra-djen-daily.service
 install -m 644 "${APP_DIR}/deploy/systemd/justra-djen-daily.timer" /etc/systemd/system/justra-djen-daily.timer
 if [[ -f /etc/nginx/sites-available/justra.conf ]] && grep -q "managed by Certbot" /etc/nginx/sites-available/justra.conf; then
@@ -100,6 +102,7 @@ rm -f /etc/nginx/sites-enabled/default
 
 systemctl daemon-reload
 systemctl enable justra.service
+systemctl enable justra-pje-worker.service
 systemctl enable justra-djen-daily.timer
 nginx -t
 systemctl reload nginx
@@ -110,6 +113,6 @@ Bootstrap concluido.
 Antes de iniciar:
 1. Edite /etc/justra/justra.env.
 2. Garanta que /mnt/justra-data/mvp/trt2/trt2_mvp.duckdb exista ou rode o pipeline de carga.
-3. Inicie com: sudo systemctl start justra
+3. Inicie com: sudo systemctl start justra justra-pje-worker
 4. Veja logs com: sudo journalctl -u justra -f
 EOF

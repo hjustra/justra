@@ -1,9 +1,8 @@
 #!/usr/bin/env python3
-"""Agente local do operador PJe.
+"""Worker da fila PJe.
 
-O agente roda no Mac do operador, busca jobs PJe aprovados no backend da Justra e
-executa `pje_operator_collect.py`. Ele não resolve CAPTCHA: apenas abre o Chrome,
-aguarda a intervenção humana e reporta o resultado ao backend.
+O worker busca jobs PJe no backend da Justra, executa `pje_operator_collect.py`
+e reporta o resultado. Em staging/prod ele deve rodar headless como serviço.
 """
 
 from __future__ import annotations
@@ -100,14 +99,15 @@ def run_collector(job: dict[str, Any], justra_url: str, extra_args: list[str]) -
 
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Busca jobs PJe aprovados na Justra e executa coleta assistida local.")
+    parser = argparse.ArgumentParser(description="Busca jobs PJe na Justra e executa a coleta automática.")
     parser.add_argument("--justra-url", default="https://staging.justra.com.br", help="Base URL da Justra.")
     parser.add_argument("--token", default=os.getenv("JUSTRA_PJE_OPERATOR_TOKEN", ""), help="Token de operador ou token admin.")
-    parser.add_argument("--operator-id", default=os.getenv("JUSTRA_PJE_OPERATOR_ID", socket.gethostname()), help="Identificador do operador local.")
+    parser.add_argument("--operator-id", default=os.getenv("JUSTRA_PJE_OPERATOR_ID", socket.gethostname()), help="Identificador do worker.")
     parser.add_argument("--poll-seconds", type=float, default=10.0, help="Intervalo de polling quando não houver job.")
     parser.add_argument("--once", action="store_true", help="Executa no máximo um job e sai.")
     parser.add_argument("--idle-exit-after", type=int, default=0, help="Sair após N segundos sem job. 0 mantém rodando.")
     parser.add_argument("--collector-timeout", type=int, default=300, help="Timeout repassado ao pje_operator_collect.py.")
+    parser.add_argument("--headless", action="store_true", help="Executar o navegador do coletor sem interface.")
     parser.add_argument("--keep-open", action="store_true", help="Manter Chrome aberto após a coleta.")
     return parser.parse_args(argv)
 
@@ -119,6 +119,8 @@ def main(argv: list[str] | None = None) -> int:
         print("[agent] Informe --token ou JUSTRA_PJE_OPERATOR_TOKEN.", file=sys.stderr)
         return 2
     extra_args = ["--timeout", str(max(30, int(args.collector_timeout)))]
+    if args.headless:
+        extra_args.append("--headless")
     if args.keep_open:
         extra_args.append("--keep-open")
     idle_since = time.monotonic()
@@ -133,7 +135,7 @@ def main(argv: list[str] | None = None) -> int:
             continue
         if not job:
             if args.once:
-                print("[agent] Nenhum job aprovado.")
+                print("[agent] Nenhum job disponível.")
                 return 0
             if args.idle_exit_after and time.monotonic() - idle_since >= args.idle_exit_after:
                 print("[agent] Sem jobs no período configurado; encerrando.")

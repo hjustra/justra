@@ -553,7 +553,10 @@ def main(argv: list[str] | None = None) -> int:
         page = context.new_page()
         print(f"[pje] Abrindo {page_url}")
         page.goto(page_url, wait_until="domcontentloaded", timeout=60_000)
-        print("[pje] Resolva o CAPTCHA/login manualmente na janela aberta. O script vai aguardar a página do processo.")
+        if args.headless:
+            print("[pje] Rodando headless; aguardando a página do processo ficar pronta.")
+        else:
+            print("[pje] Resolva o CAPTCHA/login manualmente na janela aberta. O script vai aguardar a página do processo.")
         state = wait_for_process_page(
             page,
             cnj=cnj,

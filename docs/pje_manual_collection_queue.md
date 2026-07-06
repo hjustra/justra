@@ -1,14 +1,17 @@
-# Fila PJe assistida com aprovação no staging
+# Fila automática de coleta PJe
 
-Este documento define o MVP implementado para coleta PJe assistida na Justra.
+Este documento define o MVP atual da coleta PJe na Justra.
 
-O fluxo é híbrido:
+Premissa temporária: para este fluxo, tratamos o CAPTCHA como resolvido/contornável por outra camada. A fila e o worker não implementam solução de CAPTCHA. Eles apenas tentam abrir a página do processo, capturar o conteúdo disponível e importar o payload para a Justra.
 
-- o **staging/prod** controla fila, aprovação, prioridade, auditoria e notificações;
-- o **Mac do operador** roda um agente local que abre Chrome, espera o CAPTCHA/login ser resolvido manualmente e executa `scripts/pje_operator_collect.py`;
-- o backend recebe o payload pelo endpoint PJe já existente e aplica a captura a todos os casos vinculados ao mesmo CNJ.
+## Objetivo
 
-Este fluxo não automatiza, contorna ou resolve CAPTCHA. O CAPTCHA continua sendo resolvido por uma pessoa.
+- Usuário adiciona ou recoleta um processo.
+- Backend cria um job PJe por CNJ.
+- Um worker separado consome a fila automaticamente.
+- O worker executa `scripts/pje_operator_collect.py` em modo headless.
+- A aba **PJe operador** serve apenas para monitorar jobs, tentativas, erros e status.
+- Se o job falhar, entra em retry. Depois do limite, fica como falha/manual.
 
 ## Componentes
 
@@ -16,27 +19,28 @@ Este fluxo não automatiza, contorna ou resolve CAPTCHA. O CAPTCHA continua send
    - persiste jobs em `APP_DATA_DIR/pje_jobs.json`;
    - registra auditoria em `APP_DATA_DIR/pje_job_events.jsonl`;
    - cria jobs quando usuário adiciona/recoleta processo ou quando monitoramento detecta necessidade;
-   - expõe a aba admin `/admin/pje`;
-   - permite aprovar, reenfileirar, cancelar ou marcar manual;
+   - expõe `/admin/pje` para acompanhamento;
    - conclui jobs automaticamente quando `/api/pje-extension/import` recebe payload do CNJ/job.
 
-2. **Aba de aprovação no staging**
+2. **Aba PJe operador**
    - menu admin: **PJe operador**;
    - mostra jobs por prioridade;
-   - exibe badge com pendências/aprovados/executando;
-   - permite aprovar jobs para execução pelo agente local.
+   - mostra status, tentativas, último erro e vínculo com casos;
+   - permite reenfileirar, cancelar ou marcar manual;
+   - não executa Python e não aprova job.
 
-3. **Agente local**
+3. **Worker PJe**
    - arquivo: `scripts/pje_operator_agent.py`;
-   - roda no Mac do operador;
-   - puxa apenas jobs aprovados (`operator_requested`);
-   - executa `scripts/pje_operator_collect.py` com `--job-id`, `--cnj`, `--pje-url` e `--justra-url`;
+   - roda como serviço separado do app web;
+   - busca jobs em `queued`, `operator_requested` ou `retry_wait`;
+   - respeita `next_run_at`, prioridade e limite de tentativas;
+   - executa `scripts/pje_operator_collect.py` com `--headless`;
    - reporta sucesso/falha para o backend.
 
-4. **Coletor local**
+4. **Coletor PJe**
    - arquivo: `scripts/pje_operator_collect.py`;
-   - abre Chrome no PJe;
-   - aguarda o operador resolver CAPTCHA/login;
+   - abre o PJe via Playwright;
+   - aguarda a página do processo ficar pronta;
    - captura dados visíveis, movimentos e documentos disponíveis;
    - envia para `/api/pje-extension/import`.
 
@@ -47,61 +51,62 @@ Este fluxo não automatiza, contorna ou resolve CAPTCHA. O CAPTCHA continua send
 1. Usuário informa CNJ em **Processos**.
 2. Backend cria/atualiza dossiê e acompanhamento.
 3. Backend cria job PJe com motivo `user_add`/`user_watch`.
-4. UI mostra que a coleta entrou na fila assistida.
-5. UI aguarda até 60 segundos pelo job.
-6. Se o job concluir, a tela atualiza dados PJe.
-7. Se não concluir, volta ao fallback manual: usuário abre PJe, resolve CAPTCHA e envia pela extensão.
+4. UI informa que o PJe entrou na fila automática.
+5. Worker tenta coletar em segundo plano.
+6. Se concluir rápido, a tela atualiza o processo.
+7. Se demorar, o processo continua na fila e pode ser acompanhado em **PJe operador**.
 
 ### Recoletar PJe
 
 1. Usuário clica **Recoletar PJe**.
 2. Backend cria/reabre job com prioridade alta.
-3. UI aguarda até 60 segundos.
-4. Se o operador concluir, os dados entram automaticamente.
-5. Se não, o fluxo manual com extensão continua disponível.
+3. Worker tenta coletar em segundo plano.
+4. Sucesso importa os dados e marca o job como `succeeded`.
+5. Falha entra em `retry_wait` até atingir o limite de tentativas.
 
 ### Monitoramento
 
 Quando a central de atualizações roda, o backend cria jobs `scheduled_refresh` para processos acompanhados sem job ativo e sem coleta recente. Jobs concluídos recentemente não são reenfileirados de imediato.
 
-## Fluxo do operador
+## Estados
 
-1. Entrar no staging como admin.
-2. Abrir `/admin/pje`.
-3. Aprovar jobs prioritários.
-4. Rodar no Mac:
+- `queued`: aguardando worker.
+- `operator_requested`: compatibilidade com jobs antigos; também aguardando worker.
+- `operator_running`: worker assumiu e está executando.
+- `retry_wait`: falha transitória aguardando retry.
+- `succeeded`: import recebido e aplicado.
+- `manual_required`: revisão/coleta manual necessária.
+- `failed`: falha final após limite de tentativas.
+- `cancelled`: cancelado.
+
+## Deploy
+
+O worker roda em serviço separado:
+
+```bash
+sudo systemctl enable --now justra-pje-worker
+sudo journalctl -u justra-pje-worker -f
+```
+
+Comando equivalente:
 
 ```bash
 .venv/bin/python scripts/pje_operator_agent.py \
-  --justra-url https://staging.justra.com.br \
-  --token "$JUSTRA_PJE_OPERATOR_TOKEN"
+  --justra-url http://127.0.0.1:8787 \
+  --headless \
+  --poll-seconds 10 \
+  --collector-timeout 180
 ```
 
-5. O agente puxa o próximo job aprovado.
-6. O coletor abre o Chrome no PJe.
-7. Operador resolve CAPTCHA/login manualmente.
-8. O coletor envia o payload para a Justra.
-9. Backend marca o job como `succeeded` e atualiza casos do CNJ.
-
-## Estados
-
-- `queued`: aguardando aprovação no staging.
-- `operator_requested`: aprovado; agente local pode puxar.
-- `operator_running`: agente local assumiu e está executando.
-- `retry_wait`: falha transitória aguardando retry.
-- `succeeded`: import recebido e aplicado.
-- `manual_required`: fallback manual necessário.
-- `failed`: falha final.
-- `cancelled`: cancelado.
+O serviço usa `/etc/justra/justra.env`, incluindo `JUSTRA_PJE_OPERATOR_TOKEN`.
 
 ## Segurança
 
-- A aba staging não executa Python no navegador.
-- O agente local só puxa jobs aprovados.
-- O agente executa Python por lista de argumentos, sem shell.
-- O backend aceita agente por token admin ou `JUSTRA_PJE_OPERATOR_TOKEN`.
-- Nenhum cookie, senha ou sessão PJe é persistido.
-- O import PJe continua validando origem/token conforme configuração do backend.
+- A aba staging não executa código local.
+- O worker autentica com `JUSTRA_PJE_OPERATOR_TOKEN` ou token admin.
+- O worker executa Python por lista de argumentos, sem shell.
+- Nenhum cookie, senha ou sessão PJe é persistido pelo coletor.
+- O import PJe continua validando origem conforme configuração do backend.
 
 ## Endpoints
 
@@ -112,12 +117,12 @@ Usuário:
 Admin:
 
 - `GET /api/admin/pje`: dashboard da fila.
-- `POST /api/admin/pje/jobs/action`: aprovar, retry, manual ou cancelar.
+- `POST /api/admin/pje/jobs/action`: retry, manual ou cancelar.
 
-Operador local:
+Worker:
 
-- `POST /api/operator/pje/jobs/next`: puxa próximo job aprovado.
-- `POST /api/operator/pje/jobs/finish`: reporta sucesso/falha do agente.
+- `POST /api/operator/pje/jobs/next`: puxa próximo job disponível.
+- `POST /api/operator/pje/jobs/finish`: reporta sucesso/falha.
 
 Importação:
 
@@ -127,10 +132,9 @@ Importação:
 
 - Adicionar processo cria job PJe.
 - Recoletar PJe cria/reabre job com prioridade alta.
-- `/admin/pje` mostra fila e badge de pendências.
-- Aprovar job muda status para `operator_requested`.
-- Agente local puxa somente job aprovado.
-- Coletor envia payload com `job_id`.
+- `/admin/pje` mostra fila, tentativas, execução e falhas.
+- Worker puxa jobs sem aprovação manual.
+- Worker roda `pje_operator_collect.py --headless`.
+- Falha agenda retry até o limite.
 - Import PJe marca job como `succeeded`.
-- Usuário tem fallback manual após 60 segundos.
-- Fluxo antigo da extensão continua funcionando.
+- Fluxo antigo da extensão continua disponível como fallback operacional.

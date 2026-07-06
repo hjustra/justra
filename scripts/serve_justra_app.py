@@ -73,6 +73,7 @@ DATAJUD_JOB_MAX_BACKOFF_HOURS = 12
 DATAJUD_JOB_STATUS_ACTIVE = {"queued", "retry", "rate_limited", "running"}
 PJE_JOB_ACTIVE_STATUS = {"queued", "operator_requested", "operator_running", "retry_wait"}
 PJE_JOB_WAITING_STATUS = {"queued", "operator_requested", "retry_wait"}
+PJE_JOB_CLAIMABLE_STATUS = {"queued", "operator_requested", "retry_wait"}
 PJE_JOB_MAX_ATTEMPTS = 3
 PJE_USER_WAIT_SECONDS = 60
 PJE_OPERATOR_RETRY_MINUTES = 10
@@ -3457,13 +3458,16 @@ class JustraApp:
         with self.pje_jobs_lock:
             jobs = [self._pje_job_public(job) for job in (self.pje_jobs.get("jobs") or {}).values() if isinstance(job, dict)]
             status_counts = Counter(str(job.get("status") or "unknown") for job in jobs)
+            worker = copy.deepcopy(self.pje_jobs.get("worker") or {})
         jobs.sort(key=self._pje_job_sort_key)
         active = [job for job in jobs if str(job.get("status") or "") in PJE_JOB_ACTIVE_STATUS]
+        ready = int(status_counts.get("queued", 0) + status_counts.get("operator_requested", 0))
         return {
             "ok": True,
             "summary": {
                 "total": len(jobs),
                 "active": len(active),
+                "ready": ready,
                 "queued": int(status_counts.get("queued", 0)),
                 "approved": int(status_counts.get("operator_requested", 0)),
                 "running": int(status_counts.get("operator_running", 0)),
@@ -3474,9 +3478,10 @@ class JustraApp:
             },
             "jobs": jobs[:200],
             "status_counts": dict(status_counts),
+            "worker": worker,
             "operator": {
                 "token_configured": bool(os.getenv("JUSTRA_PJE_OPERATOR_TOKEN", "").strip()),
-                "agent_command": ".venv/bin/python scripts/pje_operator_agent.py --justra-url https://staging.justra.com.br",
+                "agent_command": ".venv/bin/python scripts/pje_operator_agent.py --justra-url http://127.0.0.1:8787 --headless",
             },
             "generated_at": now_iso(),
         }
@@ -3503,8 +3508,8 @@ class JustraApp:
             if not isinstance(job, dict):
                 raise ValueError("job PJe não encontrado")
             now_text = now_iso()
-            if action in {"approve", "request", "run"}:
-                job["status"] = "operator_requested"
+            if action in {"approve", "request", "run", "retry"}:
+                job["status"] = "queued"
                 job["priority"] = max(int(job.get("priority") or 0), 95)
                 job["next_run_at"] = ""
                 job["locked_by"] = ""
@@ -3513,13 +3518,6 @@ class JustraApp:
             elif action == "manual_required":
                 job["status"] = "manual_required"
                 job["last_error"] = str(payload.get("note") or "marcado manualmente pelo operador")[:240]
-            elif action == "retry":
-                job["status"] = "queued"
-                job["next_run_at"] = ""
-                job["locked_by"] = ""
-                job["locked_at"] = ""
-                job["last_error"] = ""
-                job["priority"] = max(int(job.get("priority") or 0), 70)
             elif action == "cancel":
                 job["status"] = "cancelled"
             else:
@@ -3537,12 +3535,15 @@ class JustraApp:
         with self.pje_jobs_lock:
             candidates = []
             for job in (self.pje_jobs.get("jobs") or {}).values():
-                if not isinstance(job, dict) or str(job.get("status") or "") != "operator_requested":
+                if not isinstance(job, dict) or str(job.get("status") or "") not in PJE_JOB_CLAIMABLE_STATUS:
                     continue
                 next_run_at = self._parse_iso_datetime(job.get("next_run_at"))
                 if next_run_at and next_run_at > now_dt:
                     continue
                 if int(job.get("attempts") or 0) >= int(job.get("max_attempts") or PJE_JOB_MAX_ATTEMPTS):
+                    job["status"] = "failed"
+                    job["last_error"] = str(job.get("last_error") or "limite de tentativas PJe atingido")[:500]
+                    job["updated_at"] = now_iso()
                     continue
                 candidates.append(job)
             candidates.sort(key=self._pje_job_sort_key)
@@ -3556,7 +3557,11 @@ class JustraApp:
             job["locked_by"] = operator
             job["locked_at"] = now_iso()
             job["updated_at"] = now_iso()
-            self.pje_jobs.setdefault("worker", {}).update({"last_claim_at": now_iso(), "last_operator_id": operator})
+            self.pje_jobs.setdefault("worker", {}).update({
+                "last_claim_at": now_iso(),
+                "last_operator_id": operator,
+                "mode": "automatic_headless_worker",
+            })
             self._save_pje_jobs()
             public = self._pje_job_public(job)
         self._append_pje_job_event(str(public.get("id") or ""), "claimed", {"operator_id": operator})
@@ -3580,7 +3585,7 @@ class JustraApp:
             else:
                 attempts = int(job.get("attempts") or 0)
                 max_attempts = int(job.get("max_attempts") or PJE_JOB_MAX_ATTEMPTS)
-                job["last_error"] = error or "falha no agente local"
+                job["last_error"] = error or "falha no worker PJe"
                 if attempts < max_attempts:
                     job["status"] = "retry_wait"
                     job["next_run_at"] = (datetime.now() + timedelta(minutes=PJE_OPERATOR_RETRY_MINUTES)).isoformat(timespec="seconds")
@@ -6023,9 +6028,8 @@ class JustraApp:
         initial_message = (
             (
                 "Sessão criada a partir do link oficial do processo. "
-                "A coleta PJe entrou na fila assistida da Justra. Se ela não terminar rapidamente, você ainda pode abrir o PJe, "
-                "resolver o CAPTCHA manualmente no site do Judiciário e usar a extensão Justra PJe para enviar os dados. "
-                "Não tentamos quebrar CAPTCHA nem armazenar sessão do PJe."
+                "A coleta PJe entrou na fila automática da Justra. O worker tentará capturar movimentos e documentos "
+                "em segundo plano, e você poderá acompanhar tentativas e erros na aba PJe operador."
             )
             if link_import
             else (
@@ -6059,8 +6063,8 @@ class JustraApp:
             "representation_side": representation_side,
             "import_origin": "pje_public_link" if link_import else "",
             "pje_import": {
-                "status": "awaiting_human_captcha",
-                "status_label": "Coleta PJe em fila assistida" if pje_job else "Coleta PJe pendente",
+                "status": "queued",
+                "status_label": "Coleta PJe em fila automática" if pje_job else "Coleta PJe pendente",
                 "job_id": pje_job.get("id") or "",
                 "source_url": process_source_url,
                 "source_label": self._public_process_url_label(process_source_url),
@@ -7366,31 +7370,30 @@ class JustraApp:
                     )
                 import_state.update(
                     {
-                        "status": "awaiting_recollection" if has_previous_capture else "awaiting_human_captcha",
-                        "status_label": "Recoleta PJe em fila assistida" if has_previous_capture else "Coleta PJe em fila assistida",
+                        "status": "queued",
+                        "status_label": "Recoleta PJe em fila automática" if has_previous_capture else "Coleta PJe em fila automática",
                         "job_id": pje_job.get("id") or import_state.get("job_id", ""),
                         "source_url": source_url,
                         "source_label": self._public_process_url_label(source_url),
                         "last_attempt_at": now_iso(),
                         "last_error": "",
-                        "reminder": "A Justra tentará a coleta assistida por operador. Se demorar, abra o PJe e envie pela extensão.",
+                        "reminder": "A Justra tentará a coleta PJe automática em segundo plano.",
                     }
                 )
                 task_labels = {normalize(item.get("label") or "") for item in case.get("tasks") or []}
-                reminder_label = "Coletar autos no PJe com CAPTCHA preenchido pelo usuário"
+                reminder_label = "Acompanhar coleta automática do PJe"
                 if normalize(reminder_label) not in task_labels and not has_previous_capture:
                     case.setdefault("tasks", []).insert(0, {"id": secrets.token_hex(6), "label": reminder_label, "done": False})
                 if not has_previous_capture:
                     case["status"] = "Coleta PJe pendente"
-                    case["stage"] = "Importação assistida"
+                    case["stage"] = "Importação PJe"
                 case.setdefault("chat_messages", []).append(
                     {
                         "id": secrets.token_hex(6),
                         "role": "assistant",
                         "content": (
-                            "Abri uma nova tentativa de coleta PJe e coloquei o processo na fila assistida da Justra. "
-                            "Se não concluirmos em até 1 minuto, siga pelo fluxo manual: abra o PJe, resolva o CAPTCHA "
-                            "e use a extensão Justra PJe para enviar documentos e movimentações."
+                            "Abri uma nova tentativa de coleta PJe e coloquei o processo na fila automática da Justra. "
+                            "O worker tentará importar documentos e movimentações em segundo plano; acompanhe o status em PJe operador."
                         ),
                         "created_at": now_iso(),
                         "sources": ["PJe"],

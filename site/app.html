@@ -675,7 +675,7 @@
           <div>
             <p class="eyebrow">Operação assistida</p>
             <h1>Fila PJe</h1>
-            <p class="page-lead">Aprovação de coletas que serão executadas pelo agente local do operador, com CAPTCHA resolvido manualmente.</p>
+            <p class="page-lead">Monitoramento das coletas PJe executadas pelo worker automático, com tentativas, retries e erros.</p>
           </div>
           <div class="page-actions">
             <button class="icon-button subtle" id="refreshPjeOperator" type="button">Atualizar</button>
@@ -687,7 +687,7 @@
             <span class="collector-light" id="pjeOperatorLight"></span>
             <div>
               <h2 id="pjeOperatorState">Carregando fila</h2>
-              <p id="pjeOperatorNote">Jobs PJe ficam aqui até aprovação do operador.</p>
+              <p id="pjeOperatorNote">Jobs PJe ficam aqui para monitoramento do worker.</p>
             </div>
           </div>
           <div class="collector-actions">
@@ -700,11 +700,11 @@
         <section class="panel">
           <div class="section-head">
             <div>
-              <h2>Agente local</h2>
-              <span class="muted">Rode no Mac do operador; ele só executa jobs aprovados nesta tela.</span>
+              <h2>Worker PJe</h2>
+              <span class="muted">Serviço separado que consome a fila automaticamente e reporta sucesso ou falha.</span>
             </div>
           </div>
-          <pre class="operator-command" id="pjeAgentCommand">.venv/bin/python scripts/pje_operator_agent.py --justra-url https://staging.justra.com.br</pre>
+          <pre class="operator-command" id="pjeAgentCommand">.venv/bin/python scripts/pje_operator_agent.py --justra-url http://127.0.0.1:8787 --headless</pre>
           <p class="muted" id="pjeOperatorTokenHint">Use um token de operador em variável de ambiente ou passe com --token.</p>
         </section>
 

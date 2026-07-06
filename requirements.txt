@@ -3,6 +3,7 @@ beautifulsoup4
 pandas
 duckdb
 python-dotenv
+playwright
 pymupdf
 pdfplumber
 tqdm
