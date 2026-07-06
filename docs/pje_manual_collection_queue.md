@@ -182,6 +182,43 @@ Procedimento do operador:
 6. A extensão envia o payload com `job_id` ou `process_number`.
 7. Backend aplica a importação, marca o job como `succeeded` e atualiza todos os usuários ligados ao CNJ.
 
+## Alternativa interna: operador Python
+
+Para testes internos, também existe um fluxo sem clique na extensão, usando um Chrome visível controlado por Python:
+
+```bash
+.venv/bin/python scripts/pje_operator_collect.py \
+  --cnj "1001051-45.2025.5.02.0075" \
+  --justra-url "https://staging.justra.com.br"
+```
+
+Esse script:
+
+1. abre a URL do PJe para o CNJ;
+2. espera o operador resolver CAPTCHA/login manualmente;
+3. detecta quando a página de detalhe do processo carregou;
+4. captura movimentos, dados visíveis e documentos;
+5. salva um JSON local em `data/operator_pje_captures/`;
+6. envia o payload para a Justra pelo endpoint de importação PJe.
+
+Primeira instalação local:
+
+```bash
+.venv/bin/python -m pip install playwright
+.venv/bin/python -m playwright install chromium
+```
+
+Para testar sem enviar para a Justra:
+
+```bash
+.venv/bin/python scripts/pje_operator_collect.py \
+  --cnj "1001051-45.2025.5.02.0075" \
+  --justra-url "https://staging.justra.com.br" \
+  --dry-run
+```
+
+Observação: o endpoint atual de importação foi criado para extensão Chrome. O script Python envia um `Origin` interno (`chrome-extension://justra-pje-operator-python`) para reaproveitar esse contrato durante os testes. Se o staging/prod estiver com lista restrita de extensões, será necessário liberar esse origin ou criar um endpoint/token de operador próprio.
+
 ## Contrato com a extensão
 
 A extensão deve continuar enviando o mesmo payload atual, mas com metadados extras opcionais:
@@ -296,4 +333,3 @@ pje_jobs["10010514520255020075"]
 4. Admin: tela `/admin/pje-coleta` para operador humano.
 5. Scheduler: criação de jobs de atualização periódica com retry.
 6. Smoke tests: adicionar, recoletar, timeout, captura com job, captura sem job, multiusuário.
-
