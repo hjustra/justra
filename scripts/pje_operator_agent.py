@@ -76,15 +76,15 @@ def run_collector(job: dict[str, Any], justra_url: str, extra_args: list[str]) -
     command = [
         sys.executable,
         str(ROOT / "scripts" / "pje_operator_collect.py"),
-        "--cnj",
-        cnj,
+        "--page-url",
+        page_url,
         "--justra-url",
         justra_url,
         "--job-id",
         job_id,
+        "--cnj",
+        cnj,
     ]
-    if page_url:
-        command.extend(["--pje-url", page_url])
     command.extend(extra_args)
     print(f"[agent] Executando job {job_id} · {cnj}")
     print(f"[agent] Comando: {' '.join(command)}")
@@ -109,6 +109,8 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--collector-timeout", type=int, default=300, help="Timeout repassado ao pje_operator_collect.py.")
     parser.add_argument("--headless", action="store_true", help="Executar o navegador do coletor sem interface.")
     parser.add_argument("--keep-open", action="store_true", help="Manter Chrome aberto após a coleta.")
+    parser.add_argument("--azure-openai-endpoint", default=os.getenv("AZURE_OPENAI_ENDPOINT", ""), help="Endpoint Azure OpenAI repassado ao coletor.")
+    parser.add_argument("--azure-openai-deployment", default=os.getenv("AZURE_OPENAI_DEPLOYMENT", ""), help="Deployment Azure OpenAI repassado ao coletor.")
     return parser.parse_args(argv)
 
 
@@ -123,6 +125,10 @@ def main(argv: list[str] | None = None) -> int:
         extra_args.append("--headless")
     if args.keep_open:
         extra_args.append("--keep-open")
+    if args.azure_openai_endpoint:
+        extra_args.extend(["--azure-openai-endpoint", str(args.azure_openai_endpoint)])
+    if args.azure_openai_deployment:
+        extra_args.extend(["--azure-openai-deployment", str(args.azure_openai_deployment)])
     idle_since = time.monotonic()
     while True:
         try:

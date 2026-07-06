@@ -1,607 +1,565 @@
 #!/usr/bin/env python3
-"""Coleta assistida do PJe para operador humano.
+"""Coleta PJe parametrizada.
 
-O script abre um navegador visível, espera o operador resolver o CAPTCHA/login
-manualmente e só então captura a página do processo já liberada. Ele não tenta
-resolver, automatizar ou contornar CAPTCHA.
+Esta versão abre a URL do PJe, usa os parâmetros Azure OpenAI quando necessário
+e delega a extração/importação para o core de captura PJe da Justra.
 """
-
-from __future__ import annotations
 
 import argparse
+import asyncio
+import base64
 import json
+import mimetypes
 import os
 import re
-import sys
-import time
+from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, Optional
 
-import requests
-
-ROOT = Path(__file__).resolve().parents[1]
-DATA_ROOT = Path(os.getenv("JUSTRA_DATA_DIR", ROOT / "data"))
-DEFAULT_CHROME_PATH = "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"
-DEFAULT_ORIGIN = "chrome-extension://justra-pje-operator-python"
-
-PROCESS_FORMATTED_RE = re.compile(r"\b\d{7}-\d{2}\.\d{4}\.\d\.\d{2}\.\d{4}\b")
-PROCESS_COMPACT_RE = re.compile(r"(?<!\d)(\d{20})(?!\d)")
+import pje_operator_capture_core as pje_capture_core
 
 
-COLLECTOR_JS = r"""
-async ({ expectedCnj, maxDocuments }) => {
-  const PROCESS_FORMATTED_RE = /\b\d{7}-\d{2}\.\d{4}\.\d\.\d{2}\.\d{4}\b/;
-  const PROCESS_COMPACT_RE = /(?<!\d)(\d{20})(?!\d)/;
-  const BR_DATE_RE = /\b(\d{2})\/(\d{2})\/(\d{4})(?:\s+(\d{2}):(\d{2}))?\b/;
-  const DOCUMENT_ITEM_RE = /\b(Senten[çc]a|Decis[ãa]o|Despacho|Ac[óo]rd[ãa]o|Ata(?:\s+d[ae]\s+audi[êe]ncia)?|Peti[çc][ãa]o|Certid[ãa]o|Intima[çc][ãa]o|Notifica[çc][ãa]o|Alvar[áa]|Mandado|Of[íi]cio|Termo|C[áa]lculo|Laudo|Manifesta[çc][ãa]o|Recurso|Contrarraz[õo]es|Embargos|Contesta[çc][ãa]o|Inicial)\s*(?:\([^)]{1,100}\))?\s*[-–—]\s*([a-f0-9]{6,40})\b/gi;
-  const MAX_TEXT_CHARS = 90000;
-  const MAX_DOCUMENT_TEXT_CHARS = 180000;
-
-  const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
-  const normalizeText = (value) => String(value || "")
-    .replace(/\u00a0/g, " ")
-    .replace(/[ \t]+/g, " ")
-    .replace(/\n[ \t]+/g, "\n")
-    .replace(/[ \t]+\n/g, "\n")
-    .trim();
-  const compactSpaces = (value) => normalizeText(value).replace(/\s+/g, " ").trim();
-  const onlyDigits = (value) => String(value || "").replace(/\D/g, "");
-  const escapeRegExp = (value) => String(value).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-  const formatCnj = (digits) => /^\d{20}$/.test(digits)
-    ? `${digits.slice(0, 7)}-${digits.slice(7, 9)}.${digits.slice(9, 13)}.${digits.slice(13, 14)}.${digits.slice(14, 16)}.${digits.slice(16, 20)}`
-    : "";
-  const getVisibleText = () => normalizeText(document.body ? document.body.innerText : "");
-  const isVisibleElement = (element) => {
-    if (!element || !(element instanceof Element)) return false;
-    const style = window.getComputedStyle(element);
-    if (style.display === "none" || style.visibility === "hidden" || Number(style.opacity) === 0) return false;
-    const rect = element.getBoundingClientRect();
-    return rect.width > 20 && rect.height > 20;
-  };
-  const cleanFieldValue = (value) => compactSpaces(value).replace(/^[-:;]+/, "").replace(/[-:;]+$/, "").slice(0, 240);
-  const extractProcessNumber = (text) => {
-    const source = String(text || "");
-    const formatted = source.match(PROCESS_FORMATTED_RE);
-    if (formatted) return formatted[0];
-    const compact = source.match(PROCESS_COMPACT_RE);
-    return compact ? formatCnj(compact[1]) : "";
-  };
-  const hasCaptcha = (text) => {
-    const value = String(text || "");
-    if (/captcha|recaptcha|hcaptcha|n[aã]o sou um rob[oô]/i.test(value)) return true;
-    return Boolean(document.querySelector("iframe[src*='captcha'], iframe[src*='recaptcha'], iframe[src*='hcaptcha'], .g-recaptcha, [data-sitekey]"));
-  };
-  const cleanPageTextForCaseFields = (text) => {
-    const lines = String(text || "").split(/\n+/).map((line) => compactSpaces(line)).filter(Boolean);
-    const stopIndex = lines.findIndex((line) => /^Documentos do processo$/i.test(line));
-    return (stopIndex >= 0 ? lines.slice(0, stopIndex) : lines.slice(0, 60)).join("\n");
-  };
-  const firstLabelValue = (text, labels) => {
-    const lines = String(text || "").split(/\n+/).map((line) => compactSpaces(line)).filter(Boolean);
-    for (const label of labels) {
-      const sameLine = new RegExp(`^${escapeRegExp(label)}\\s*:?\\s*(.+)$`, "i");
-      for (let index = 0; index < lines.length; index += 1) {
-        const line = lines[index];
-        const sameLineMatch = line.match(sameLine);
-        if (sameLineMatch && sameLineMatch[1]) return cleanFieldValue(sameLineMatch[1]);
-        if (line.toLowerCase() === label.toLowerCase() && lines[index + 1]) return cleanFieldValue(lines[index + 1]);
-      }
-    }
-    const compact = compactSpaces(text);
-    for (const label of labels) {
-      const inline = new RegExp(`${escapeRegExp(label)}\\s*:?\\s*([^\\n\\r]{2,240})`, "i");
-      const match = compact.match(inline);
-      if (match && match[1]) return cleanFieldValue(match[1]);
-    }
-    return "";
-  };
-  const extractCourtUnit = (text) => {
-    const head = cleanPageTextForCaseFields(text);
-    const withProcessHeader = head.match(/\b\d{7}-\d{2}\.\d{4}\.\d\.\d{2}\.\d{4}\s*\(([^)]+)\)/);
-    if (withProcessHeader && withProcessHeader[1]) return cleanFieldValue(withProcessHeader[1]);
-    const firstVara = head.match(/\b(\d+[ªa]?\s+Vara do Trabalho de [^\n()]{2,120})/i);
-    return firstVara && firstVara[1] ? cleanFieldValue(firstVara[1]) : "";
-  };
-  const extractCaseClass = (text) => {
-    const head = cleanPageTextForCaseFields(text);
-    const match = head.match(/\b([A-Z][A-Za-z]{2,10})\s+\d{7}-\d{2}\.\d{4}\.\d\.\d{2}\.\d{4}\b/);
-    return match ? match[1] : "";
-  };
-  const extractDegreeFromUrl = (url) => {
-    const match = String(url || "").match(/\/detalhe-processo\/[^/]+\/(\d+)/);
-    return match ? match[1] : "";
-  };
-  const parseBrDateMillis = (value) => {
-    const match = String(value || "").match(BR_DATE_RE);
-    if (!match) return 0;
-    return Date.UTC(Number(match[3]), Number(match[2]) - 1, Number(match[1]), Number(match[4] || "0"), Number(match[5] || "0"));
-  };
-  const looksLikeMovement = (text) => {
-    const value = compactSpaces(text);
-    if (value.length < 12 || value.length > 900) return false;
-    if (BR_DATE_RE.test(value)) return true;
-    return /\b(movimenta[cç][aã]o|juntada|remessa|conclusos|distribui[cç][aã]o|intima[cç][aã]o|pauta|audi[eê]ncia|senten[cç]a|ac[oó]rd[aã]o|despacho|decis[aã]o)\b/i.test(value);
-  };
-  const collectMovements = (text) => {
-    const rows = [];
-    document.querySelectorAll("tr").forEach((row) => {
-      const cells = Array.from(row.cells || []).map((cell) => compactSpaces(cell.innerText)).filter(Boolean);
-      const value = cells.join(" · ");
-      if (looksLikeMovement(value)) rows.push({ text: value, source: "table" });
-    });
-    ["li", "article", "[role='row']", "[class*='timeline']", "[class*='moviment']", "[class*='andament']", "[class*='evento']"].forEach((selector) => {
-      document.querySelectorAll(selector).forEach((element) => {
-        const value = compactSpaces(element.innerText || element.textContent || "");
-        if (looksLikeMovement(value)) rows.push({ text: value, source: "element" });
-      });
-    });
-    const lines = String(text || "").split(/\n+/).map((line) => compactSpaces(line)).filter(Boolean);
-    for (let index = 0; index < lines.length; index += 1) {
-      if (!BR_DATE_RE.test(lines[index])) continue;
-      const block = compactSpaces([lines[index], lines[index + 1] || "", lines[index + 2] || ""].filter(Boolean).join(" · "));
-      if (looksLikeMovement(block)) rows.push({ text: block, source: "text" });
-    }
-    const seen = new Set();
-    const deduped = [];
-    rows.forEach((row) => {
-      const value = compactSpaces(row.text);
-      const key = value.toLowerCase();
-      if (seen.has(key)) return;
-      seen.add(key);
-      deduped.push({
-        id: `pje-movement-${deduped.length + 1}`,
-        text: value,
-        date_text: (value.match(BR_DATE_RE) || [""])[0],
-        sort_time: parseBrDateMillis(value),
-        source: row.source
-      });
-    });
-    return deduped.sort((left, right) => right.sort_time - left.sort_time).slice(0, 80).map(({ sort_time, ...row }) => row);
-  };
-  const collectAttachments = () => {
-    const seen = new Set();
-    const rows = [];
-    document.querySelectorAll("a[href]").forEach((anchor) => {
-      const href = anchor.href || "";
-      const label = compactSpaces(anchor.innerText || anchor.textContent || anchor.getAttribute("aria-label") || "");
-      if (!href || seen.has(href) || !/documento|download|autos|integra|pdf|arquivo|anexo|expediente/i.test(`${href} ${label}`)) return;
-      seen.add(href);
-      rows.push({ label: label.slice(0, 180) || "Documento do PJe", href, kind: /\.pdf(?:$|[?#])/i.test(href) || /pdf/i.test(label) ? "pdf_or_document" : "link" });
-    });
-    return rows.slice(0, 50);
-  };
-  const stripCaptureUiText = (text) => normalizeText(String(text || "").split(/\n+/).filter((line) => !/^Justra|^Operador PJe|^Captura PJe|^Baixar todos docs|^Enviar agora$/i.test(compactSpaces(line))).join("\n"));
-  const documentScore = (text) => {
-    const value = compactSpaces(text);
-    if (value.length < 240) return 0;
-    let score = 0;
-    if (value.length > 800) score += 1;
-    if (value.length > 2000) score += 1;
-    if (/\b(PODER JUDICI[ÁA]RIO|JUSTI[ÇC]A DO TRABALHO|TRIBUNAL REGIONAL DO TRABALHO|VARA DO TRABALHO)\b/i.test(value)) score += 3;
-    if (/\b(SENTEN[ÇC]A|DECIS[ÃA]O|DESPACHO|AC[ÓO]RD[ÃA]O|ATA DE AUDI[ÊE]NCIA)\b/i.test(value)) score += 2;
-    if (/\b(RELAT[ÓO]RIO|FUNDAMENTA[ÇC][ÃA]O|DISPOSITIVO|DECIDO|JULGO|VISTOS|CONCLUS[ÃA]O)\b/i.test(value)) score += 2;
-    if (/Assinado eletronicamente|Documento assinado|Certid[aã]o de publica[cç][aã]o/i.test(value)) score += 2;
-    return score;
-  };
-  const detectDocumentType = (text, title) => {
-    const value = `${title || ""}\n${text || ""}`;
-    const options = [["sentenca", /\bSenten[çc]a\b/i], ["decisao", /\bDecis[ãa]o\b/i], ["despacho", /\bDespacho\b/i], ["acordao", /\bAc[óo]rd[ãa]o\b/i], ["ata", /\bAta d[ae] audi[êe]ncia\b/i], ["peticao", /\bPeti[çc][ãa]o\b/i], ["certidao", /\bCertid[ãa]o\b/i], ["intimacao", /\bIntima[çc][ãa]o\b/i]];
-    const match = options.find(([, pattern]) => pattern.test(value));
-    return match ? match[0] : "documento";
-  };
-  const normalizeDocumentCode = (value) => {
-    const match = String(value || "").match(/[a-f0-9]{6,40}/i);
-    return match ? match[0].toLowerCase() : "";
-  };
-  const extractDocumentCode = (text, url) => {
-    const explicitId = String(text || "").match(/\bId\s+([a-f0-9]{6,40})\b/i);
-    if (explicitId) return normalizeDocumentCode(explicitId[1]);
-    const hash = String(url || "").match(/#([a-f0-9]{6,40})\b/i);
-    return hash ? normalizeDocumentCode(hash[1]) : "";
-  };
-  const titleFromDocumentText = (text, fallback = "") => {
-    const lines = String(text || "").split(/\n+/).map((line) => compactSpaces(line)).filter(Boolean);
-    const explicit = lines.find((line) => /\b(Senten[çc]a|Decis[ãa]o|Despacho|Ac[óo]rd[ãa]o|Ata|Certid[ãa]o|Intima[çc][ãa]o|Peti[çc][ãa]o)\b/i.test(line) && line.length <= 180);
-    return explicit || lines.find((line) => line.length >= 6 && line.length <= 160 && !BR_DATE_RE.test(line)) || fallback || document.title || "Documento PJe";
-  };
-  const documentFromText = (text, source) => {
-    const contentText = stripCaptureUiText(text).slice(0, MAX_DOCUMENT_TEXT_CHARS);
-    const score = documentScore(contentText);
-    if (score < 4) return null;
-    const title = titleFromDocumentText(contentText, source.title);
-    return {
-      id: `pje-document-${source.index || 1}`,
-      title,
-      document_type: detectDocumentType(contentText, title),
-      document_code: extractDocumentCode(`${title}\n${contentText}`, source.url || location.href),
-      captured_at: new Date().toISOString(),
-      source: source.source || "top",
-      source_url: source.url || location.href,
-      frame_url: source.frame_url || "",
-      extraction_method: source.method || "dom-visible-text",
-      confidence_score: score,
-      text_length: contentText.length,
-      content_text: contentText
-    };
-  };
-  const collectOpenDocumentsSync = () => {
-    const selectors = ["[role='dialog']", ".modal", ".modal-content", ".cdk-overlay-pane", ".mat-dialog-container", ".p-dialog", ".ui-dialog", "article", "main", "[class*='documento']", "[id*='documento']", "[class*='inteiro']", "[id*='inteiro']", "[class*='visualizador']", "[id*='visualizador']"];
-    const elements = new Set();
-    selectors.forEach((selector) => document.querySelectorAll(selector).forEach((element) => {
-      if (isVisibleElement(element)) elements.add(element);
-    }));
-    const docs = [];
-    elements.forEach((element) => {
-      const doc = documentFromText(element.innerText || element.textContent || "", { title: element.getAttribute("aria-label") || "", url: location.href, source: "top", method: "element-visible-text", index: docs.length + 1 });
-      if (doc) docs.push(doc);
-    });
-    const bodyText = stripCaptureUiText(getVisibleText());
-    if (!docs.length && documentScore(bodyText) >= 4) {
-      const doc = documentFromText(bodyText, { title: document.title || "", url: location.href, source: "top", method: "body-visible-text", index: 1 });
-      if (doc) docs.push(doc);
-    }
-    return docs;
-  };
-  const documentItemMatches = (text) => {
-    const matches = [];
-    DOCUMENT_ITEM_RE.lastIndex = 0;
-    for (const match of compactSpaces(text).matchAll(DOCUMENT_ITEM_RE)) {
-      matches.push({ type_label: cleanFieldValue(match[1] || "Documento"), code: normalizeDocumentCode(match[2] || ""), title: cleanFieldValue(match[0] || "") });
-    }
-    return matches;
-  };
-  const findDocumentOpeners = () => {
-    const selector = ["a", "button", "[role='button']", "[onclick]", "[tabindex]", "li", "tr", "[class*='timeline']", "[class*='moviment']", "[class*='andament']", "[class*='evento']", "[class*='documento']", "[id*='documento']"].join(",");
-    const rows = [];
-    const seen = new Set();
-    Array.from(document.querySelectorAll(selector)).forEach((element) => {
-      if (!isVisibleElement(element)) return;
-      const text = compactSpaces(element.innerText || element.textContent || "");
-      if (!text || text.length > 900 || /baixar\s+certid[aã]o|certid[aã]o\s+de\s+juntada|baixar\s+arquivo|download/i.test(text)) return;
-      documentItemMatches(text).forEach((match) => {
-        if (!match.code || seen.has(match.code)) return;
-        seen.add(match.code);
-        rows.push({ ...match, text, target: element });
-      });
-    });
-    return rows.slice(0, maxDocuments || 80);
-  };
-  const clickElement = (element) => {
-    try {
-      element.scrollIntoView({ block: "center", inline: "nearest" });
-      const rect = element.getBoundingClientRect();
-      const eventOptions = { bubbles: true, cancelable: true, view: window, clientX: rect.left + rect.width / 2, clientY: rect.top + Math.min(rect.height / 2, 24) };
-      ["pointerdown", "mousedown", "mouseup", "click"].forEach((eventName) => {
-        const EventClass = eventName.startsWith("pointer") && "PointerEvent" in window ? PointerEvent : MouseEvent;
-        element.dispatchEvent(new EventClass(eventName, eventOptions));
-      });
-      if (typeof element.click === "function") element.click();
-      return true;
-    } catch (_error) {
-      return false;
-    }
-  };
-  const dedupeDocuments = (documents) => {
-    const deduped = [];
-    documents.filter(Boolean).sort((left, right) => (right.confidence_score || 0) - (left.confidence_score || 0) || (right.text_length || 0) - (left.text_length || 0)).forEach((doc) => {
-      const code = normalizeDocumentCode(doc.document_code);
-      const text = compactSpaces(doc.content_text || "");
-      const exists = deduped.some((existing) => {
-        const existingCode = normalizeDocumentCode(existing.document_code);
-        const existingText = compactSpaces(existing.content_text || "");
-        return (code && existingCode && code === existingCode) || (text.length > 280 && existingText.includes(text.slice(0, 800)));
-      });
-      if (!exists) deduped.push({ ...doc, id: `pje-document-${deduped.length + 1}` });
-    });
-    return deduped;
-  };
-  const captureCandidateDocument = async (candidate) => {
-    if (candidate.code) location.hash = candidate.code;
-    await sleep(500);
-    clickElement(candidate.target);
-    await sleep(1200);
-    return collectOpenDocumentsSync().filter((doc) => {
-      const code = normalizeDocumentCode(doc.document_code);
-      return !candidate.code || code === candidate.code || new RegExp(`\\b${escapeRegExp(candidate.code)}\\b`, "i").test(`${doc.title}\n${doc.content_text}`);
-    }).map((doc) => ({ ...doc, document_code: normalizeDocumentCode(doc.document_code || candidate.code), opener_title: candidate.title, opener_type_label: candidate.type_label, opened_from_timeline: true }));
-  };
-
-  const visibleText = getVisibleText();
-  const headerText = cleanPageTextForCaseFields(visibleText);
-  const sourceText = [location.href, document.title, visibleText].join("\n");
-  const processNumber = extractProcessNumber(sourceText);
-  const processDigits = onlyDigits(processNumber);
-  if (expectedCnj && onlyDigits(expectedCnj) !== processDigits) {
-    throw new Error(`CNJ aberto (${processNumber || "não identificado"}) não confere com ${expectedCnj}`);
-  }
-  if (hasCaptcha(visibleText)) {
-    throw new Error("CAPTCHA/login ainda aparece na página; resolva manualmente antes da coleta");
-  }
-
-  const documents = [...collectOpenDocumentsSync()];
-  const documentCandidates = findDocumentOpeners().map((candidate) => ({ code: candidate.code, title: candidate.title, type_label: candidate.type_label, captured: false, error: "" }));
-  const openers = findDocumentOpeners();
-  for (let index = 0; index < openers.length; index += 1) {
-    try {
-      const captured = await captureCandidateDocument(openers[index]);
-      if (captured.length) {
-        documents.push(...captured);
-        documentCandidates[index].captured = true;
-      } else {
-        documentCandidates[index].error = "sem texto capturado";
-      }
-    } catch (error) {
-      documentCandidates[index].error = error.message || "erro ao abrir documento";
-    }
-    await sleep(120);
-  }
-  const dedupedDocuments = dedupeDocuments(documents).slice(0, maxDocuments || 80);
-  const fieldText = [headerText, ...dedupedDocuments.map((doc) => String(doc.content_text || "").slice(0, 6000))].join("\n");
-  const payload = {
-    schema_version: "justra.pje.capture.v1",
-    source: "pje-trt2-python-operator",
-    extension_version: "python-operator",
-    captured_at: new Date().toISOString(),
-    capture_mode: "operator_python",
-    page: {
-      url: location.href,
-      referrer: document.referrer || "",
-      host: location.host,
-      path: location.pathname,
-      title: document.title || "",
-      text_length: visibleText.length
-    },
-    process: {
-      number: processNumber,
-      number_digits: processDigits.length === 20 ? processDigits : "",
-      degree: extractDegreeFromUrl(location.href),
-      tribunal: "TRT2",
-      class: extractCaseClass(headerText) || firstLabelValue(headerText, ["Classe judicial", "Classe"]),
-      court_unit: extractCourtUnit(headerText) || firstLabelValue(headerText, ["Órgão julgador", "Orgao julgador", "Vara", "Unidade judiciária"]),
-      filing_date: firstLabelValue(headerText, ["Data de distribuição", "Distribuído em", "Distribuido em", "Autuado em", "Ajuizado em"])
-    },
-    parties: {
-      claimant: firstLabelValue(fieldText, ["Reclamante", "Autor", "Autora", "Exequente", "Agravante", "Polo ativo"]),
-      defendant: firstLabelValue(fieldText, ["Reclamado", "Reclamada", "Réu", "Ré", "Executado", "Executada", "Agravado", "Agravada", "Polo passivo"]),
-      intimated: firstLabelValue(fieldText, ["Parte intimada", "Destinatário", "Destinatario", "Intimado", "Intimada"])
-    },
-    movements: collectMovements(visibleText),
-    attachments: collectAttachments(),
-    documents: dedupedDocuments,
-    document_refs: [],
-    document_candidates: documentCandidates,
-    raw: {
-      visible_text: visibleText.slice(0, MAX_TEXT_CHARS)
-    },
-    diagnostics: {
-      captcha_detected: hasCaptcha(visibleText),
-      open_document_count: dedupedDocuments.length,
-      document_ref_count: 0,
-      document_candidate_count: documentCandidates.length,
-      document_capture_success_count: documentCandidates.filter((candidate) => candidate.captured).length,
-      all_document_capture_attempted: true
-    }
-  };
-  return payload;
-}
-"""
+DEFAULT_PAGE_URL = "https://pje.trt2.jus.br/consultaprocessual/captcha/detalhe-processo/1002578-33.2025.5.02.0204/1"
+DEFAULT_OUTPUT_DIR = Path("captcha_output")
+DEFAULT_AZURE_OPENAI_ENDPOINT = "https://optti-oa-us.openai.azure.com/"
+DEFAULT_AZURE_OPENAI_DEPLOYMENT = "gpt-4.1-mini"
 
 
-READY_CHECK_JS = r"""
-({ expectedCnj, minTextLength, minMovements }) => {
-  const PROCESS_FORMATTED_RE = /\b\d{7}-\d{2}\.\d{4}\.\d\.\d{2}\.\d{4}\b/;
-  const PROCESS_COMPACT_RE = /(?<!\d)(\d{20})(?!\d)/;
-  const BR_DATE_RE = /\b\d{2}\/\d{2}\/\d{4}(?:\s+\d{2}:\d{2})?\b/;
-  const normalizeText = (value) => String(value || "").replace(/\u00a0/g, " ").replace(/[ \t]+/g, " ").trim();
-  const onlyDigits = (value) => String(value || "").replace(/\D/g, "");
-  const formatCnj = (digits) => /^\d{20}$/.test(digits)
-    ? `${digits.slice(0, 7)}-${digits.slice(7, 9)}.${digits.slice(9, 13)}.${digits.slice(13, 14)}.${digits.slice(14, 16)}.${digits.slice(16, 20)}`
-    : "";
-  const text = normalizeText(document.body ? document.body.innerText : "");
-  const hasCaptcha = /captcha|recaptcha|hcaptcha|n[aã]o sou um rob[oô]/i.test(text) || Boolean(document.querySelector("iframe[src*='captcha'], iframe[src*='recaptcha'], iframe[src*='hcaptcha'], .g-recaptcha, [data-sitekey]"));
-  const source = [location.href, document.title, text].join("\n");
-  const formatted = source.match(PROCESS_FORMATTED_RE);
-  const compact = source.match(PROCESS_COMPACT_RE);
-  const processNumber = formatted ? formatted[0] : compact ? formatCnj(compact[1]) : "";
-  const processDigits = onlyDigits(processNumber);
-  const expectedDigits = onlyDigits(expectedCnj || "");
-  const movementMatches = text.match(BR_DATE_RE) || [];
-  if (hasCaptcha) return { ok: false, reason: "Aguardando você resolver o CAPTCHA/login manualmente.", processNumber, textLength: text.length, movementCount: movementMatches.length };
-  if (!processDigits) return { ok: false, reason: "Aguardando CNJ visível na página.", processNumber, textLength: text.length, movementCount: movementMatches.length };
-  if (expectedDigits && expectedDigits !== processDigits) return { ok: false, reason: `CNJ aberto (${processNumber}) não confere com ${expectedCnj}.`, processNumber, textLength: text.length, movementCount: movementMatches.length };
-  if (text.length < minTextLength) return { ok: false, reason: "Aguardando conteúdo do processo carregar.", processNumber, textLength: text.length, movementCount: movementMatches.length };
-  if (movementMatches.length < minMovements) return { ok: false, reason: "Aguardando movimentações do processo.", processNumber, textLength: text.length, movementCount: movementMatches.length };
-  return { ok: true, reason: "Página liberada.", processNumber, textLength: text.length, movementCount: movementMatches.length };
-}
-"""
+@dataclass(frozen=True)
+class Config:
+    page_url: str
+    cnj: str
+    justra_url: str
+    job_id: str
+    origin: str
+    azure_openai_api_key: str
+    azure_openai_endpoint: str
+    azure_openai_deployment: str
+    output_dir: Path
+    output: str
+    timeout: int
+    settle_seconds: float
+    min_text_length: int
+    min_movements: int
+    max_documents: int
+    dry_run: bool
+    headless: bool
+    keep_open: bool
 
 
-def compact_process_number(value: str) -> str:
-    return re.sub(r"\D", "", value or "")
+def parse_args() -> Config:
+    parser = argparse.ArgumentParser(
+        description="Abre a página informada e usa as configurações do Azure OpenAI passadas por argumento ou ambiente."
+    )
+
+    parser.add_argument(
+        "--page-url",
+        default=os.getenv("PAGE_URL", ""),
+        help="URL da página. Também pode ser definida via variável de ambiente PAGE_URL.",
+    )
+    parser.add_argument("--pje-url", default="", help="Alias legado para --page-url.")
+    parser.add_argument("--cnj", default="", help="Número CNJ do processo; usado para montar URL se --page-url for omitido.")
+    parser.add_argument("--degree", default="1", help="Grau do processo no PJe quando --cnj for usado.")
+    parser.add_argument("--justra-url", default=os.getenv("JUSTRA_URL", "https://staging.justra.com.br"), help="Base URL da Justra.")
+    parser.add_argument("--job-id", default="", help="ID do job PJe na fila da Justra.")
+    parser.add_argument("--origin", default=pje_capture_core.DEFAULT_ORIGIN, help="Origin enviado ao endpoint de importação PJe.")
+    parser.add_argument(
+        "--azure-openai-api-key",
+        default=os.getenv("AZURE_OPENAI_API_KEY", ""),
+        help="Chave da API Azure OpenAI. Também pode ser definida via AZURE_OPENAI_API_KEY.",
+    )
+    parser.add_argument(
+        "--azure-openai-endpoint",
+        default=os.getenv("AZURE_OPENAI_ENDPOINT", DEFAULT_AZURE_OPENAI_ENDPOINT),
+        help="Endpoint do Azure OpenAI. Também pode ser definido via AZURE_OPENAI_ENDPOINT.",
+    )
+    parser.add_argument(
+        "--azure-openai-deployment",
+        default=os.getenv("AZURE_OPENAI_DEPLOYMENT", DEFAULT_AZURE_OPENAI_DEPLOYMENT),
+        help="Nome do deployment/modelo no Azure OpenAI. Também pode ser definido via AZURE_OPENAI_DEPLOYMENT.",
+    )
+    parser.add_argument(
+        "--output-dir",
+        default=os.getenv("OUTPUT_DIR", str(DEFAULT_OUTPUT_DIR)),
+        help="Diretório de saída. Também pode ser definido via OUTPUT_DIR.",
+    )
+    parser.add_argument("--output", default="", help="Arquivo JSON de saída. Se omitido, usa output-dir.")
+    parser.add_argument("--timeout", type=int, default=300, help="Tempo máximo aguardando a página liberada ficar pronta.")
+    parser.add_argument("--settle-seconds", type=float, default=2.5, help="Espera extra após a página ficar pronta.")
+    parser.add_argument("--min-text-length", type=int, default=700, help="Texto mínimo para considerar a página carregada.")
+    parser.add_argument("--min-movements", type=int, default=1, help="Quantidade mínima de movimentos para considerar pronto.")
+    parser.add_argument("--max-documents", type=int, default=80, help="Máximo de documentos/tentativas de documentos.")
+    parser.add_argument("--dry-run", action="store_true", help="Captura e salva JSON, mas não envia para a Justra.")
+    parser.add_argument("--headless", action="store_true", help="Executar sem janela.")
+    parser.add_argument("--keep-open", action="store_true", help="Manter navegador aberto após captura.")
+
+    args = parser.parse_args()
+    page_url = args.page_url or args.pje_url
+    cnj = pje_capture_core.format_process_number(args.cnj) if args.cnj else ""
+    if not page_url and cnj:
+        page_url = pje_capture_core.pje_url_for_process(cnj, args.degree)
+    if not page_url:
+        page_url = DEFAULT_PAGE_URL
+
+    return Config(
+        page_url=page_url,
+        cnj=cnj,
+        justra_url=args.justra_url,
+        job_id=args.job_id,
+        origin=args.origin,
+        azure_openai_api_key=args.azure_openai_api_key,
+        azure_openai_endpoint=args.azure_openai_endpoint,
+        azure_openai_deployment=args.azure_openai_deployment,
+        output_dir=Path(args.output_dir),
+        output=args.output,
+        timeout=max(30, int(args.timeout)),
+        settle_seconds=max(0.0, float(args.settle_seconds)),
+        min_text_length=max(0, int(args.min_text_length)),
+        min_movements=max(0, int(args.min_movements)),
+        max_documents=max(0, int(args.max_documents)),
+        dry_run=bool(args.dry_run),
+        headless=bool(args.headless),
+        keep_open=bool(args.keep_open),
+    )
 
 
-def format_process_number(value: str) -> str:
-    digits = compact_process_number(value)
-    if len(digits) != 20:
-        return value
-    return f"{digits[:7]}-{digits[7:9]}.{digits[9:13]}.{digits[13:14]}.{digits[14:16]}.{digits[16:20]}"
+def clean_base64(value: str) -> str:
+    value = value.strip()
+
+    if value.startswith("data:") and "," in value:
+        return value.split(",", 1)[1]
+
+    return value
 
 
-def extract_process_number(value: str) -> str:
-    formatted = PROCESS_FORMATTED_RE.search(value or "")
-    if formatted:
-        return formatted.group(0)
-    compact = PROCESS_COMPACT_RE.search(value or "")
-    if compact:
-        return format_process_number(compact.group(1))
-    return ""
+def save_base64_file(value: str, path: Path) -> None:
+    decoded = base64.b64decode(clean_base64(value))
+    path.write_bytes(decoded)
 
 
-def pje_url_for_process(cnj: str, degree: str = "1") -> str:
-    return f"https://pje.trt2.jus.br/consultaprocessual/captcha/detalhe-processo/{format_process_number(cnj)}/{degree}"
+def guess_audio_extension(content_type: str, url: str) -> str:
+    content_type = (content_type or "").lower()
+    url = (url or "").lower()
+
+    if "wav" in content_type or ".wav" in url:
+        return ".wav"
+
+    if "mpeg" in content_type or "mp3" in content_type or ".mp3" in url:
+        return ".mp3"
+
+    if "ogg" in content_type or ".ogg" in url:
+        return ".ogg"
+
+    if "aac" in content_type or ".aac" in url:
+        return ".aac"
+
+    return ".bin"
 
 
-def slug(value: str) -> str:
-    return re.sub(r"[^A-Za-z0-9._-]+", "_", value or "").strip("_") or "processo"
+def find_key_recursively(obj: Any, target_key: str) -> Optional[Any]:
+    if isinstance(obj, dict):
+        if target_key in obj:
+            return obj[target_key]
+
+        for value in obj.values():
+            found = find_key_recursively(value, target_key)
+
+            if found is not None:
+                return found
+
+    elif isinstance(obj, list):
+        for item in obj:
+            found = find_key_recursively(item, target_key)
+
+            if found is not None:
+                return found
+
+    return None
 
 
-def default_output_path(cnj: str) -> Path:
-    stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
-    return DATA_ROOT / "operator_pje_captures" / f"pje-{slug(compact_process_number(cnj))}-{stamp}.json"
+def image_to_data_url(image_path: str | Path) -> str:
+    path = Path(image_path)
+
+    if not path.exists():
+        raise FileNotFoundError(f"Imagem não encontrada: {path}")
+
+    mime_type, _ = mimetypes.guess_type(path)
+
+    if mime_type is None:
+        mime_type = "image/jpeg"
+
+    image_bytes = path.read_bytes()
+    image_base64 = base64.b64encode(image_bytes).decode("utf-8")
+
+    return f"data:{mime_type};base64,{image_base64}"
 
 
-def load_playwright():
-    try:
-        from playwright.sync_api import sync_playwright  # type: ignore
-    except ImportError as exc:
-        raise SystemExit(
-            "Playwright Python não está instalado neste venv.\n"
-            "Instale para testar:\n\n"
-            "  .venv/bin/python -m pip install playwright\n"
-            "  .venv/bin/python -m playwright install chromium\n\n"
-            "Depois rode novamente o comando de coleta.\n"
-        ) from exc
-    return sync_playwright
+def read_image_text(image_path: str | Path, config: Config) -> str:
+    from openai import OpenAI
 
-
-def wait_for_process_page(page: Any, cnj: str, timeout_seconds: int, min_text_length: int, min_movements: int) -> dict[str, Any]:
-    deadline = time.monotonic() + timeout_seconds
-    last_reason = ""
-    while time.monotonic() < deadline:
-        state = page.evaluate(
-            READY_CHECK_JS,
-            {
-                "expectedCnj": cnj,
-                "minTextLength": min_text_length,
-                "minMovements": min_movements,
-            },
+    if not config.azure_openai_api_key:
+        raise ValueError(
+            "Defina a chave com --azure-openai-api-key ou com a variável AZURE_OPENAI_API_KEY."
         )
+
+    if not config.azure_openai_endpoint:
+        raise ValueError(
+            "Defina o endpoint com --azure-openai-endpoint ou com a variável AZURE_OPENAI_ENDPOINT."
+        )
+
+    client = OpenAI(
+        api_key=config.azure_openai_api_key,
+        base_url=f"{config.azure_openai_endpoint.rstrip('/')}/openai/v1/",
+    )
+
+    image_data_url = image_to_data_url(image_path)
+
+    response = client.chat.completions.create(
+        model=config.azure_openai_deployment,
+        messages=[
+            {
+                "role": "system",
+                "content": (
+                    "Você é um OCR. Extraia apenas o texto visível da imagem. "
+                    "Se houver incerteza em algum caractere, indique com ?."
+                ),
+            },
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "text",
+                        "text": "Leia o texto desta imagem e retorne somente a transcrição.",
+                    },
+                    {
+                        "type": "image_url",
+                        "image_url": {
+                            "url": image_data_url,
+                        },
+                    },
+                ],
+            },
+        ],
+        temperature=0,
+        max_tokens=300,
+    )
+
+    texto = response.choices[0].message.content.strip()
+    texto_limpo = re.sub(r"\s+", "", texto)
+
+    return texto_limpo
+
+
+async def wait_for_pje_operator_collect_ready(
+    page: Any,
+    cnj: str,
+    timeout_seconds: int = 300,
+    min_text_length: int = 700,
+    min_movements: int = 1,
+) -> dict[str, Any]:
+    deadline = asyncio.get_running_loop().time() + timeout_seconds
+    last_reason = ""
+
+    while asyncio.get_running_loop().time() < deadline:
+        try:
+            state = await page.evaluate(
+                pje_capture_core.READY_CHECK_JS,
+                {
+                    "expectedCnj": cnj,
+                    "minTextLength": min_text_length,
+                    "minMovements": min_movements,
+                },
+            )
+        except Exception as e:
+            state = {
+                "ok": False,
+                "reason": f"Aguardando navegação/página estabilizar: {repr(e)}",
+                "textLength": 0,
+                "movementCount": 0,
+            }
+
         reason = str(state.get("reason") or "")
         if reason != last_reason:
             print(f"[pje] {reason} texto={state.get('textLength')} movimentos={state.get('movementCount')}")
             last_reason = reason
+
         if state.get("ok"):
             return state
-        time.sleep(1.5)
+
+        await asyncio.sleep(1.5)
+
     raise TimeoutError(f"página PJe não ficou pronta em {timeout_seconds}s: {last_reason}")
 
 
-def write_payload(payload: dict[str, Any], output_path: Path) -> None:
-    output_path.parent.mkdir(parents=True, exist_ok=True)
-    output_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
-
-
-def send_to_justra(payload: dict[str, Any], justra_url: str, origin: str, timeout: int = 120) -> dict[str, Any]:
-    endpoint = justra_url.rstrip("/") + "/api/pje-extension/import"
-    response = requests.post(
-        endpoint,
-        json=payload,
-        headers={
-            "Content-Type": "application/json",
-            "Origin": origin,
-            "User-Agent": "Justra PJe Python Operator/0.1",
-        },
-        timeout=timeout,
+async def call_pje_operator_collect(page: Any, config: Config) -> None:
+    cnj = (
+        config.cnj
+        or pje_capture_core.extract_process_number(page.url)
+        or pje_capture_core.extract_process_number(config.page_url)
     )
-    text = response.text
-    try:
-        data = response.json() if text else {}
-    except ValueError:
-        data = {"raw": text}
-    if not response.ok:
-        raise RuntimeError(f"Justra respondeu HTTP {response.status_code}: {data}")
-    return data
+
+    if not cnj:
+        raise RuntimeError("não consegui identificar o CNJ para chamar o coletor PJe")
+
+    cnj = pje_capture_core.format_process_number(cnj)
+
+    print("\n[pje] Chamando pje_operator_collect na página já liberada.")
+    state = await wait_for_pje_operator_collect_ready(
+        page,
+        cnj=cnj,
+        timeout_seconds=config.timeout,
+        min_text_length=config.min_text_length,
+        min_movements=config.min_movements,
+    )
+    print(f"[pje] Página pronta: {state.get('processNumber')} ({state.get('textLength')} caracteres)")
+    if config.settle_seconds > 0:
+        await asyncio.sleep(config.settle_seconds)
+
+    payload = await page.evaluate(
+        pje_capture_core.COLLECTOR_JS,
+        {
+            "expectedCnj": cnj,
+            "maxDocuments": config.max_documents,
+        },
+    )
+
+    payload["operator_capture"] = {
+        "script": "scripts/pje_operator_collect.py",
+        "called": "pje_operator_collect",
+        "captured_at": datetime.now().isoformat(timespec="seconds"),
+        "requested_cnj": cnj,
+        "requested_url": page.url,
+        "justra_url": config.justra_url,
+        "job_id": config.job_id,
+    }
+    if config.job_id:
+        payload["job_id"] = config.job_id
+
+    cnj_digits = re.sub(r"\D", "", cnj)
+    output_path = Path(config.output) if config.output else config.output_dir / f"pje_operator_collect_{cnj_digits or 'processo'}.json"
+    await asyncio.to_thread(pje_capture_core.write_payload, payload, output_path)
+    print(
+        "[pje] JSON salvo em "
+        f"{output_path} | movimentos={len(payload.get('movements') or [])} "
+        f"docs={len(payload.get('documents') or [])}"
+    )
+
+    if config.dry_run:
+        print("[pje] Dry-run ativo: não enviei para a Justra.")
+        return
+
+    result = await asyncio.to_thread(
+        pje_capture_core.send_to_justra,
+        payload,
+        config.justra_url,
+        config.origin,
+    )
+    print(f"[pje] Enviado para Justra. Import ID: {result.get('import_id') or 'registrado'}")
+    print(json.dumps(result, ensure_ascii=False, indent=2))
 
 
-def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Coleta PJe assistida por operador humano.")
-    parser.add_argument("--cnj", required=True, help="Número CNJ do processo.")
-    parser.add_argument("--justra-url", default="https://staging.justra.com.br", help="Base URL da Justra.")
-    parser.add_argument("--job-id", default="", help="ID do job PJe na fila da Justra.")
-    parser.add_argument("--pje-url", default="", help="URL PJe já parametrizada. Se omitida, usa TRT2 consulta processual.")
-    parser.add_argument("--degree", default="1", help="Grau do processo no PJe. Padrão: 1.")
-    parser.add_argument("--timeout", type=int, default=300, help="Tempo máximo aguardando você resolver CAPTCHA/login.")
-    parser.add_argument("--settle-seconds", type=float, default=2.5, help="Espera extra após a página ficar pronta.")
-    parser.add_argument("--min-text-length", type=int, default=700, help="Texto mínimo para considerar a página carregada.")
-    parser.add_argument("--min-movements", type=int, default=1, help="Quantidade mínima de datas/movimentos para considerar pronto.")
-    parser.add_argument("--max-documents", type=int, default=80, help="Máximo de documentos/tentativas de documentos.")
-    parser.add_argument("--output", default="", help="Caminho para salvar o JSON capturado.")
-    parser.add_argument("--dry-run", action="store_true", help="Captura e salva JSON, mas não envia para a Justra.")
-    parser.add_argument("--origin", default=DEFAULT_ORIGIN, help="Origin enviado para o endpoint atual de importação.")
-    parser.add_argument("--headless", action="store_true", help="Executar sem janela. Não use se precisar resolver CAPTCHA.")
-    parser.add_argument("--chrome-path", default=os.getenv("JUSTRA_CHROME_PATH", DEFAULT_CHROME_PATH), help="Caminho do Google Chrome.")
-    parser.add_argument("--keep-open", action="store_true", help="Manter o navegador aberto após captura.")
-    return parser.parse_args(argv)
+async def main(config: Config) -> int:
+    from playwright.async_api import async_playwright
 
+    config.output_dir.mkdir(parents=True, exist_ok=True)
 
-def main(argv: list[str] | None = None) -> int:
-    args = parse_args(argv)
-    cnj = format_process_number(args.cnj)
-    page_url = args.pje_url or pje_url_for_process(cnj, args.degree)
-    output_path = Path(args.output) if args.output else default_output_path(cnj)
+    image_future: asyncio.Future[dict[str, Any]] = asyncio.Future()
+    audio_future: asyncio.Future[dict[str, Any]] = asyncio.Future()
 
-    sync_playwright = load_playwright()
-    with sync_playwright() as playwright:
-        launch_options: dict[str, Any] = {
-            "headless": bool(args.headless),
-        }
-        if args.chrome_path and Path(args.chrome_path).exists():
-            launch_options["executable_path"] = args.chrome_path
-        browser = playwright.chromium.launch(**launch_options)
-        context = browser.new_context(locale="pt-BR", viewport={"width": 1440, "height": 1000})
-        page = context.new_page()
-        print(f"[pje] Abrindo {page_url}")
-        page.goto(page_url, wait_until="domcontentloaded", timeout=60_000)
-        if args.headless:
-            print("[pje] Rodando headless; aguardando a página do processo ficar pronta.")
-        else:
-            print("[pje] Resolva o CAPTCHA/login manualmente na janela aberta. O script vai aguardar a página do processo.")
-        state = wait_for_process_page(
-            page,
-            cnj=cnj,
-            timeout_seconds=args.timeout,
-            min_text_length=args.min_text_length,
-            min_movements=args.min_movements,
+    async with async_playwright() as p:
+        browser = await p.chromium.launch(headless=config.headless)
+
+        context = await browser.new_context(
+            user_agent=(
+                "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+                "AppleWebKit/537.36 (KHTML, like Gecko) "
+                "Chrome/124.0.0.0 Safari/537.36"
+            ),
+            viewport={"width": 1400, "height": 900},
         )
-        print(f"[pje] Página pronta: {state.get('processNumber')} ({state.get('textLength')} caracteres)")
-        if args.settle_seconds > 0:
-            time.sleep(args.settle_seconds)
-        payload = page.evaluate(
-            COLLECTOR_JS,
-            {
-                "expectedCnj": cnj,
-                "maxDocuments": max(0, int(args.max_documents)),
-            },
-        )
-        payload["operator_capture"] = {
-            "script": "scripts/pje_operator_collect.py",
-            "captured_at": datetime.now().isoformat(timespec="seconds"),
-            "requested_cnj": cnj,
-            "requested_url": page_url,
-            "justra_url": args.justra_url,
-            "job_id": args.job_id,
-        }
-        if args.job_id:
-            payload["job_id"] = args.job_id
-        write_payload(payload, output_path)
-        print(
-            "[pje] JSON salvo em "
-            f"{output_path} | movimentos={len(payload.get('movements') or [])} "
-            f"docs={len(payload.get('documents') or [])}"
-        )
-        if not args.dry_run:
-            result = send_to_justra(payload, args.justra_url, args.origin)
-            print(f"[pje] Enviado para Justra. Import ID: {result.get('import_id') or 'registrado'}")
-            print(json.dumps(result, ensure_ascii=False, indent=2))
-        else:
-            print("[pje] Dry-run ativo: não enviei para a Justra.")
-        if args.keep_open:
-            input("[pje] Pressione Enter para fechar o navegador...")
-        context.close()
-        browser.close()
-    return 0
+
+        page = await context.new_page()
+
+        async def handle_response(response: Any) -> None:
+            try:
+                url = response.url
+                status = response.status
+                content_type = response.headers.get("content-type", "")
+
+                lower_url = url.lower()
+                lower_ct = content_type.lower()
+
+                is_relevant = (
+                    "captcha" in lower_url
+                    or "audio" in lower_url
+                    or "desafio" in lower_url
+                    or "application/json" in lower_ct
+                    or lower_ct.startswith("audio/")
+                )
+
+                if not is_relevant:
+                    return
+
+                print("\n--- RESPONSE RELEVANTE ---")
+                print("URL:", url)
+                print("STATUS:", status)
+                print("CONTENT-TYPE:", content_type)
+
+                if lower_ct.startswith("audio/") and not audio_future.done():
+                    body = await response.body()
+                    ext = guess_audio_extension(content_type, url)
+
+                    audio_path = config.output_dir / f"captcha_audio{ext}"
+                    request_url_path = config.output_dir / "captcha_audio_request_url.txt"
+
+                    audio_path.write_bytes(body)
+                    request_url_path.write_text(url, encoding="utf-8")
+
+                    print("Áudio binário salvo em:", audio_path)
+
+                    audio_future.set_result(
+                        {
+                            "type": "binary-audio",
+                            "url": url,
+                            "path": str(audio_path),
+                        }
+                    )
+
+                    return
+
+                try:
+                    text = await response.text()
+                except Exception as e:
+                    print("Não consegui ler response.text():", repr(e))
+                    return
+
+                print("TEXTO COMEÇO:", text[:300].replace("\n", " "))
+
+                try:
+                    data = json.loads(text)
+                except Exception:
+                    return
+
+                token = find_key_recursively(data, "tokenDesafio")
+                imagem = find_key_recursively(data, "imagem")
+                audio = find_key_recursively(data, "audio")
+
+                if token and imagem and not image_future.done():
+                    image_path = config.output_dir / "captcha_imagem.jpg"
+                    token_path = config.output_dir / "token_desafio.txt"
+                    json_path = config.output_dir / "captcha_imagem_payload.json"
+                    request_url_path = config.output_dir / "captcha_imagem_request_url.txt"
+
+                    save_base64_file(imagem, image_path)
+
+                    token_path.write_text(token, encoding="utf-8")
+
+                    json_path.write_text(
+                        json.dumps(data, ensure_ascii=False, indent=2),
+                        encoding="utf-8",
+                    )
+
+                    request_url_path.write_text(url, encoding="utf-8")
+
+                    print("Imagem salva em:", image_path)
+                    print("Token salvo em:", token_path)
+
+                    image_future.set_result(
+                        {
+                            "url": url,
+                            "token": token,
+                            "image_path": str(image_path),
+                        }
+                    )
+
+                if audio and not audio_future.done():
+                    audio_path = config.output_dir / "captcha_audio.wav"
+                    json_path = config.output_dir / "captcha_audio_payload.json"
+                    request_url_path = config.output_dir / "captcha_audio_request_url.txt"
+
+                    save_base64_file(audio, audio_path)
+
+                    json_path.write_text(
+                        json.dumps(data, ensure_ascii=False, indent=2),
+                        encoding="utf-8",
+                    )
+
+                    request_url_path.write_text(url, encoding="utf-8")
+
+                    print("Áudio base64 salvo em:", audio_path)
+
+                    audio_future.set_result(
+                        {
+                            "type": "json-audio",
+                            "url": url,
+                            "path": str(audio_path),
+                        }
+                    )
+
+            except Exception as e:
+                print("Erro no handle_response:", repr(e))
+
+        page.on("response", handle_response)
+
+        print("Abrindo página:")
+        print(config.page_url)
+
+        try:
+            await page.goto(
+                config.page_url,
+                wait_until="domcontentloaded",
+                timeout=60_000,
+            )
+
+            print("\nPágina aberta.")
+            print("Aguardando captura da imagem do CAPTCHA...")
+
+            try:
+                image_result = await asyncio.wait_for(image_future, timeout=30)
+                print("\nCaptcha de imagem capturado com sucesso.")
+                print(image_result)
+
+                texto = read_image_text(image_result["image_path"], config)
+                captcha_texto = re.sub(r"\s+", "", texto).strip()
+
+                print("Texto transcrito:", texto)
+                print("Texto sem espaços:", captcha_texto)
+
+                campo_captcha = page.locator(
+                    "input[name='captcha'], "
+                    "input[id*='captcha'], "
+                    "input[placeholder*='captcha' i], "
+                    "input[type='text']"
+                ).first
+
+                await campo_captcha.wait_for(timeout=30000)
+                await campo_captcha.fill(captcha_texto)
+
+                botao = page.locator(
+                    "button[type='submit'], "
+                    "input[type='submit'], "
+                    "button:has-text('Consultar'), "
+                    "button:has-text('Enviar'), "
+                    "button:has-text('Confirmar')"
+                ).first
+
+                await botao.wait_for(timeout=30000)
+                await botao.click()
+
+                print("Captcha preenchido e enviado.")
+            except asyncio.TimeoutError:
+                print("\nNão capturei imagem do CAPTCHA em 30s; tentando coletar a página atual diretamente.")
+
+            await call_pje_operator_collect(page, config)
+            return 0
+
+        finally:
+            if config.keep_open and not config.headless:
+                await asyncio.to_thread(input, "[pje] Pressione Enter para fechar o navegador...")
+            await browser.close()
 
 
 if __name__ == "__main__":
-    raise SystemExit(main())
+    config = parse_args()
+    raise SystemExit(asyncio.run(main(config)))
