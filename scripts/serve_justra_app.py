@@ -28,7 +28,7 @@ from html import unescape
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
-from urllib.parse import parse_qs, urlencode, urlparse
+from urllib.parse import parse_qs, unquote, urlencode, urlparse
 from xml.sax.saxutils import escape as xml_escape
 from zoneinfo import ZoneInfo
 
@@ -58,6 +58,8 @@ DEADLINE_WATCH_PATH = APP_DATA_DIR / "deadline_watches.json"
 DATAJUD_MOVEMENTS_PATH = APP_DATA_DIR / "datajud_movements.json"
 DATAJUD_JOBS_PATH = APP_DATA_DIR / "datajud_jobs.json"
 PJE_EXTENSION_IMPORTS_PATH = APP_DATA_DIR / "pje_extension_imports.jsonl"
+PJE_JOBS_PATH = APP_DATA_DIR / "pje_jobs.json"
+PJE_JOB_EVENTS_PATH = APP_DATA_DIR / "pje_job_events.jsonl"
 ACTIVE_DEADLINE_LOOKBACK_DAYS = 30
 ACTIVE_UPDATE_LOOKBACK_DAYS = 30
 DATAJUD_REFRESH_HOURS = 6
@@ -69,6 +71,11 @@ DATAJUD_JOB_STALE_LOCK_MINUTES = 20
 DATAJUD_JOB_BACKOFF_MINUTES = 15
 DATAJUD_JOB_MAX_BACKOFF_HOURS = 12
 DATAJUD_JOB_STATUS_ACTIVE = {"queued", "retry", "rate_limited", "running"}
+PJE_JOB_ACTIVE_STATUS = {"queued", "operator_requested", "operator_running", "retry_wait"}
+PJE_JOB_WAITING_STATUS = {"queued", "operator_requested", "retry_wait"}
+PJE_JOB_MAX_ATTEMPTS = 3
+PJE_USER_WAIT_SECONDS = 60
+PJE_OPERATOR_RETRY_MINUTES = 10
 DATAJUD_LABOR_COURTS = [f"trt{number}" for number in range(1, 25)] + ["tst"]
 DATAJUD_ENDPOINTS = {
     **{
@@ -1734,6 +1741,8 @@ class JustraApp:
         self.datajud_lock = threading.Lock()
         self.datajud_movements = load_json_file(DATAJUD_MOVEMENTS_PATH, {"processes": {}, "lawyer_searches": []})
         self.datajud_jobs = load_json_file(DATAJUD_JOBS_PATH, {"jobs": {}, "worker": {}})
+        self.pje_jobs_lock = threading.Lock()
+        self.pje_jobs = load_json_file(PJE_JOBS_PATH, {"jobs": {}, "worker": {}})
         self.datajud_refreshing: set[str] = set()
         self.datajud_worker_stop = threading.Event()
         self.datajud_worker_thread: threading.Thread | None = None
@@ -1750,6 +1759,12 @@ class JustraApp:
             self.datajud_jobs["jobs"] = {}
         if not isinstance(self.datajud_jobs.get("worker"), dict):
             self.datajud_jobs["worker"] = {}
+        if not isinstance(self.pje_jobs, dict):
+            self.pje_jobs = {"jobs": {}, "worker": {}}
+        if not isinstance(self.pje_jobs.get("jobs"), dict):
+            self.pje_jobs["jobs"] = {}
+        if not isinstance(self.pje_jobs.get("worker"), dict):
+            self.pje_jobs["worker"] = {}
         self.audio_playback_lock = threading.Lock()
         self.audio_playback_tokens: dict[str, dict[str, Any]] = {}
         if not isinstance(self.cases, dict):
@@ -2520,6 +2535,14 @@ class JustraApp:
             self.deadline_watches[key] = watch
             self._save_deadline_watches()
         self._queue_datajud_refresh({process_number}, force=False)
+        self.enqueue_pje_job(
+            process_number,
+            reason="user_watch",
+            priority=80,
+            user_id=user_id,
+            case_id=str(watch.get("case_id") or ""),
+            waiting_user=True,
+        )
         return {"ok": True, "watch": copy.deepcopy(watch)}
 
     def remove_deadline_watch(self, user_id: str, payload: dict[str, Any]) -> dict[str, Any]:
@@ -3228,6 +3251,380 @@ class JustraApp:
 
     def _save_datajud_jobs(self) -> None:
         save_json_file(DATAJUD_JOBS_PATH, self.datajud_jobs)
+
+    def _save_pje_jobs(self) -> None:
+        save_json_file(PJE_JOBS_PATH, self.pje_jobs)
+
+    @staticmethod
+    def _official_pje_url_for_process(process_number: str, degree: str = "1") -> str:
+        digits = compact_process_number(process_number)
+        if len(digits) != 20:
+            return ""
+        court = digits[14:16]
+        trt_number = str(int(court or "2") or 2)
+        return f"https://pje.trt{trt_number}.jus.br/consultaprocessual/captcha/detalhe-processo/{format_process_number(digits)}/{degree or '1'}"
+
+    @staticmethod
+    def _pje_job_id(process_number: str) -> str:
+        digits = compact_process_number(process_number)
+        return f"pje:{digits}" if digits else ""
+
+    def _append_pje_job_event(self, job_id: str, event: str, detail: dict[str, Any] | None = None) -> None:
+        record = {
+            "created_at": now_iso(),
+            "job_id": str(job_id or ""),
+            "event": str(event or "")[:80],
+            "detail": detail or {},
+        }
+        append_jsonl_file(PJE_JOB_EVENTS_PATH, record)
+
+    def _pje_active_job_counts_locked(self) -> Counter:
+        jobs = self.pje_jobs.get("jobs") or {}
+        return Counter(
+            str(job.get("status") or "unknown")
+            for job in jobs.values()
+            if isinstance(job, dict) and str(job.get("status") or "") in PJE_JOB_ACTIVE_STATUS
+        )
+
+    def _pje_job_user_has_process(self, user_id: str, process_number: str) -> bool:
+        compact = compact_process_number(process_number)
+        if not compact:
+            return False
+        with self.cases_lock:
+            if any(
+                case.get("owner_user_id") == user_id
+                and compact_process_number(case.get("process_number")) == compact
+                for case in self.cases.values()
+            ):
+                return True
+        with self.deadline_lock:
+            return any(
+                watch.get("user_id") == user_id
+                and compact_process_number(watch.get("process_number")) == compact
+                and watch.get("active", True)
+                for watch in self.deadline_watches.values()
+                if isinstance(watch, dict)
+            )
+
+    def _pje_case_counts_for_process(self, process_number: str) -> dict[str, Any]:
+        compact = compact_process_number(process_number)
+        case_ids: list[str] = []
+        owner_ids: list[str] = []
+        titles: list[str] = []
+        latest_capture = ""
+        document_count = 0
+        with self.cases_lock:
+            for case in self.cases.values():
+                if compact_process_number(case.get("process_number")) != compact:
+                    continue
+                case_ids.append(str(case.get("id") or ""))
+                owner_id = str(case.get("owner_user_id") or "")
+                if owner_id and owner_id not in owner_ids:
+                    owner_ids.append(owner_id)
+                if case.get("title"):
+                    titles.append(str(case.get("title") or ""))
+                import_state = case.get("pje_import") if isinstance(case.get("pje_import"), dict) else {}
+                latest_capture = max(latest_capture, str(import_state.get("last_attempt_at") or ""))
+                latest_capture = max(latest_capture, str(import_state.get("last_capture_at") or ""))
+                latest_capture = max(latest_capture, str(import_state.get("last_import_at") or ""))
+                document_count = max(document_count, int(import_state.get("captured_document_count") or 0))
+        return {
+            "case_ids": [value for value in case_ids if value],
+            "owner_ids": owner_ids,
+            "case_count": len(case_ids),
+            "owner_count": len(owner_ids),
+            "title": titles[0] if titles else "",
+            "latest_capture_at": latest_capture,
+            "captured_document_count": document_count,
+        }
+
+    def enqueue_pje_job(
+        self,
+        process_number: str,
+        *,
+        reason: str,
+        priority: int = 50,
+        user_id: str = "",
+        case_id: str = "",
+        page_url: str = "",
+        force: bool = False,
+        waiting_user: bool = False,
+    ) -> dict[str, Any]:
+        compact = compact_process_number(process_number)
+        if not compact:
+            raise ValueError("processo PJe inválido")
+        job_id = self._pje_job_id(compact)
+        now_text = now_iso()
+        source_url = page_url.strip() if page_url else self._official_pje_url_for_process(compact)
+        if source_url:
+            try:
+                source_url = self._sanitize_process_source_url(source_url)
+            except ValueError:
+                source_url = self._official_pje_url_for_process(compact)
+        with self.pje_jobs_lock:
+            jobs = self.pje_jobs.setdefault("jobs", {})
+            existing = jobs.get(job_id) if isinstance(jobs.get(job_id), dict) else {}
+            status = str(existing.get("status") or "")
+            should_reset = force or status not in PJE_JOB_ACTIVE_STATUS
+            waiting_until = existing.get("waiting_user_until") or ""
+            if waiting_user:
+                waiting_until = (datetime.now() + timedelta(seconds=PJE_USER_WAIT_SECONDS)).isoformat(timespec="seconds")
+            waiting_users = [
+                str(item)
+                for item in existing.get("waiting_user_ids", [])
+                if str(item)
+            ] if isinstance(existing.get("waiting_user_ids"), list) else []
+            if user_id and user_id not in waiting_users:
+                waiting_users.append(user_id)
+            case_ids = [
+                str(item)
+                for item in existing.get("case_ids", [])
+                if str(item)
+            ] if isinstance(existing.get("case_ids"), list) else []
+            if case_id and case_id not in case_ids:
+                case_ids.append(case_id)
+            job = {
+                **existing,
+                "id": job_id,
+                "process_number": format_process_number(compact),
+                "process_number_digits": compact,
+                "degree": str(existing.get("degree") or "1"),
+                "tribunal": str(existing.get("tribunal") or f"TRT{int(compact[14:16] or '2') or 2}"),
+                "page_url": source_url,
+                "status": "queued" if should_reset else status,
+                "reason": str(reason or existing.get("reason") or "scheduled_refresh")[:80],
+                "priority": max(int(existing.get("priority") or 0), int(priority or 0)),
+                "attempts": 0 if should_reset else int(existing.get("attempts") or 0),
+                "max_attempts": int(existing.get("max_attempts") or PJE_JOB_MAX_ATTEMPTS),
+                "waiting_user_until": waiting_until,
+                "waiting_user_ids": waiting_users[:20],
+                "case_ids": case_ids[:50],
+                "next_run_at": "" if should_reset else str(existing.get("next_run_at") or ""),
+                "locked_by": "" if should_reset else str(existing.get("locked_by") or ""),
+                "locked_at": "" if should_reset else str(existing.get("locked_at") or ""),
+                "last_error": "" if should_reset else str(existing.get("last_error") or ""),
+                "last_import_id": str(existing.get("last_import_id") or ""),
+                "last_capture_at": str(existing.get("last_capture_at") or ""),
+                "created_at": str(existing.get("created_at") or now_text),
+                "updated_at": now_text,
+            }
+            jobs[job_id] = job
+            self._save_pje_jobs()
+        self._append_pje_job_event(job_id, "queued", {"reason": reason, "priority": priority, "user_id": user_id, "case_id": case_id})
+        return copy.deepcopy(job)
+
+    def _queue_pje_refresh_for_processes(self, process_numbers: set[str], *, reason: str, priority: int = 30) -> int:
+        queued = 0
+        for process_number in sorted({compact_process_number(value) for value in process_numbers if compact_process_number(value)}):
+            job_id = self._pje_job_id(process_number)
+            with self.pje_jobs_lock:
+                existing = self.pje_jobs.get("jobs", {}).get(job_id)
+                if isinstance(existing, dict) and str(existing.get("status") or "") in PJE_JOB_ACTIVE_STATUS:
+                    continue
+                if isinstance(existing, dict) and str(existing.get("status") or "") in {"manual_required", "failed"}:
+                    continue
+                if isinstance(existing, dict) and str(existing.get("status") or "") == "succeeded":
+                    captured_at = self._parse_iso_datetime(existing.get("last_capture_at"))
+                    if captured_at and datetime.now() - captured_at < timedelta(hours=DATAJUD_REFRESH_HOURS):
+                        continue
+            self.enqueue_pje_job(process_number, reason=reason, priority=priority, force=False)
+            queued += 1
+        return queued
+
+    def _pje_job_public(self, job: dict[str, Any]) -> dict[str, Any]:
+        process_number = compact_process_number(job.get("process_number") or job.get("process_number_digits"))
+        counts = self._pje_case_counts_for_process(process_number)
+        return {
+            **copy.deepcopy(job),
+            "process_number": format_process_number(process_number),
+            "process_number_digits": process_number,
+            "case_count": counts["case_count"],
+            "owner_count": counts["owner_count"],
+            "case_title": counts["title"],
+            "case_ids": list(dict.fromkeys([*(job.get("case_ids") or []), *counts["case_ids"]])),
+            "latest_case_capture_at": counts["latest_capture_at"],
+            "case_captured_document_count": counts["captured_document_count"],
+        }
+
+    @staticmethod
+    def _pje_job_sort_key(job: dict[str, Any]) -> tuple[int, str, str]:
+        waiting_until = str(job.get("waiting_user_until") or "9999-12-31T23:59:59")
+        next_run_at = str(job.get("next_run_at") or "0000-01-01T00:00:00")
+        created_at = str(job.get("created_at") or "")
+        return (-int(job.get("priority") or 0), waiting_until, next_run_at or created_at)
+
+    def pje_operator_dashboard(self) -> dict[str, Any]:
+        with self.pje_jobs_lock:
+            jobs = [self._pje_job_public(job) for job in (self.pje_jobs.get("jobs") or {}).values() if isinstance(job, dict)]
+            status_counts = Counter(str(job.get("status") or "unknown") for job in jobs)
+        jobs.sort(key=self._pje_job_sort_key)
+        active = [job for job in jobs if str(job.get("status") or "") in PJE_JOB_ACTIVE_STATUS]
+        return {
+            "ok": True,
+            "summary": {
+                "total": len(jobs),
+                "active": len(active),
+                "queued": int(status_counts.get("queued", 0)),
+                "approved": int(status_counts.get("operator_requested", 0)),
+                "running": int(status_counts.get("operator_running", 0)),
+                "retry_wait": int(status_counts.get("retry_wait", 0)),
+                "succeeded": int(status_counts.get("succeeded", 0)),
+                "manual_required": int(status_counts.get("manual_required", 0)),
+                "failed": int(status_counts.get("failed", 0)),
+            },
+            "jobs": jobs[:200],
+            "status_counts": dict(status_counts),
+            "operator": {
+                "token_configured": bool(os.getenv("JUSTRA_PJE_OPERATOR_TOKEN", "").strip()),
+                "agent_command": ".venv/bin/python scripts/pje_operator_agent.py --justra-url https://staging.justra.com.br",
+            },
+            "generated_at": now_iso(),
+        }
+
+    def pje_job_status_for_user(self, user: dict[str, Any], job_id: str) -> dict[str, Any]:
+        job_id = str(job_id or "").strip()
+        with self.pje_jobs_lock:
+            job = self.pje_jobs.get("jobs", {}).get(job_id)
+            if not isinstance(job, dict):
+                raise ValueError("job PJe não encontrado")
+            public = self._pje_job_public(job)
+        if user.get("role") != "admin" and not self._pje_job_user_has_process(user["id"], public.get("process_number_digits") or ""):
+            raise ValueError("job PJe não encontrado")
+        return {"ok": True, "job": public}
+
+    def admin_pje_job_action(self, admin: dict[str, Any], payload: dict[str, Any]) -> dict[str, Any]:
+        job_id = str(payload.get("job_id") or "").strip()
+        action = str(payload.get("action") or "").strip().lower()
+        if not job_id:
+            raise ValueError("job não informado")
+        with self.pje_jobs_lock:
+            jobs = self.pje_jobs.setdefault("jobs", {})
+            job = jobs.get(job_id)
+            if not isinstance(job, dict):
+                raise ValueError("job PJe não encontrado")
+            now_text = now_iso()
+            if action in {"approve", "request", "run"}:
+                job["status"] = "operator_requested"
+                job["priority"] = max(int(job.get("priority") or 0), 95)
+                job["next_run_at"] = ""
+                job["locked_by"] = ""
+                job["locked_at"] = ""
+                job["last_error"] = ""
+            elif action == "manual_required":
+                job["status"] = "manual_required"
+                job["last_error"] = str(payload.get("note") or "marcado manualmente pelo operador")[:240]
+            elif action == "retry":
+                job["status"] = "queued"
+                job["next_run_at"] = ""
+                job["locked_by"] = ""
+                job["locked_at"] = ""
+                job["last_error"] = ""
+                job["priority"] = max(int(job.get("priority") or 0), 70)
+            elif action == "cancel":
+                job["status"] = "cancelled"
+            else:
+                raise ValueError("ação de job PJe inválida")
+            job["updated_at"] = now_text
+            job["updated_by"] = str(admin.get("email") or admin.get("id") or "")[:120]
+            self._save_pje_jobs()
+            public = self._pje_job_public(job)
+        self._append_pje_job_event(job_id, action, {"admin_id": admin.get("id"), "admin_email": admin.get("email")})
+        return {"ok": True, "job": public, "dashboard": self.pje_operator_dashboard()}
+
+    def claim_next_pje_operator_job(self, operator_id: str = "") -> dict[str, Any]:
+        operator = re.sub(r"[^A-Za-z0-9_.@-]+", "-", str(operator_id or "")).strip("-")[:80] or f"operator-{secrets.token_hex(3)}"
+        now_dt = datetime.now()
+        with self.pje_jobs_lock:
+            candidates = []
+            for job in (self.pje_jobs.get("jobs") or {}).values():
+                if not isinstance(job, dict) or str(job.get("status") or "") != "operator_requested":
+                    continue
+                next_run_at = self._parse_iso_datetime(job.get("next_run_at"))
+                if next_run_at and next_run_at > now_dt:
+                    continue
+                if int(job.get("attempts") or 0) >= int(job.get("max_attempts") or PJE_JOB_MAX_ATTEMPTS):
+                    continue
+                candidates.append(job)
+            candidates.sort(key=self._pje_job_sort_key)
+            if not candidates:
+                self.pje_jobs.setdefault("worker", {})["last_empty_poll_at"] = now_iso()
+                self._save_pje_jobs()
+                return {"ok": True, "job": None}
+            job = candidates[0]
+            job["status"] = "operator_running"
+            job["attempts"] = int(job.get("attempts") or 0) + 1
+            job["locked_by"] = operator
+            job["locked_at"] = now_iso()
+            job["updated_at"] = now_iso()
+            self.pje_jobs.setdefault("worker", {}).update({"last_claim_at": now_iso(), "last_operator_id": operator})
+            self._save_pje_jobs()
+            public = self._pje_job_public(job)
+        self._append_pje_job_event(str(public.get("id") or ""), "claimed", {"operator_id": operator})
+        return {"ok": True, "job": public}
+
+    def finish_pje_operator_job(self, job_id: str, payload: dict[str, Any]) -> dict[str, Any]:
+        ok = bool(payload.get("ok"))
+        error = str(payload.get("error") or "")[:500]
+        result = payload.get("result") if isinstance(payload.get("result"), dict) else {}
+        with self.pje_jobs_lock:
+            jobs = self.pje_jobs.setdefault("jobs", {})
+            job = jobs.get(job_id)
+            if not isinstance(job, dict):
+                raise ValueError("job PJe não encontrado")
+            if ok:
+                if str(job.get("status") or "") != "succeeded":
+                    job["status"] = "succeeded"
+                job["last_error"] = ""
+                job["last_import_id"] = str(result.get("import_id") or job.get("last_import_id") or "")
+                job["last_capture_at"] = now_iso()
+            else:
+                attempts = int(job.get("attempts") or 0)
+                max_attempts = int(job.get("max_attempts") or PJE_JOB_MAX_ATTEMPTS)
+                job["last_error"] = error or "falha no agente local"
+                if attempts < max_attempts:
+                    job["status"] = "retry_wait"
+                    job["next_run_at"] = (datetime.now() + timedelta(minutes=PJE_OPERATOR_RETRY_MINUTES)).isoformat(timespec="seconds")
+                else:
+                    job["status"] = "failed"
+                    job["next_run_at"] = ""
+            job["locked_by"] = ""
+            job["locked_at"] = ""
+            job["updated_at"] = now_iso()
+            self._save_pje_jobs()
+            public = self._pje_job_public(job)
+        self._append_pje_job_event(job_id, "finished" if ok else "failed", {"ok": ok, "error": error, "result": result})
+        return {"ok": True, "job": public}
+
+    def mark_pje_jobs_imported(self, process_number: str, import_id: str, promotion: dict[str, Any], payload: dict[str, Any]) -> None:
+        compact = compact_process_number(process_number)
+        if not compact:
+            return
+        operator_capture = payload.get("operator_capture") if isinstance(payload.get("operator_capture"), dict) else {}
+        explicit_job_id = str(payload.get("job_id") or operator_capture.get("job_id") or "").strip()
+        candidate_ids = [explicit_job_id] if explicit_job_id else []
+        candidate_ids.append(self._pje_job_id(compact))
+        changed = False
+        with self.pje_jobs_lock:
+            jobs = self.pje_jobs.setdefault("jobs", {})
+            for job_id in dict.fromkeys(candidate_ids):
+                job = jobs.get(job_id)
+                if not isinstance(job, dict):
+                    continue
+                job["status"] = "succeeded"
+                job["last_error"] = ""
+                job["last_import_id"] = import_id
+                job["last_capture_at"] = now_iso()
+                job["documents_added"] = int(promotion.get("documents_added") or 0)
+                job["case_ids"] = list(dict.fromkeys([*(job.get("case_ids") or []), *(promotion.get("case_ids") or [])]))[:50]
+                job["owner_ids"] = list(dict.fromkeys([*(job.get("owner_ids") or []), *(promotion.get("owner_ids") or [])]))[:50]
+                job["locked_by"] = ""
+                job["locked_at"] = ""
+                job["updated_at"] = now_iso()
+                changed = True
+            if changed:
+                self._save_pje_jobs()
+        if changed:
+            self._append_pje_job_event(self._pje_job_id(compact), "imported", {"import_id": import_id, "promotion": promotion})
 
     def _datajud_api_key(self) -> str:
         return os.getenv("DATAJUD_API_KEY", "").strip()
@@ -4772,6 +5169,12 @@ class JustraApp:
             force=force_datajud,
             queue_refresh=queue_datajud,
         )
+        pje_queued_now = self._queue_pje_refresh_for_processes(
+            process_numbers,
+            reason="scheduled_refresh",
+            priority=30,
+        )
+        pje_dashboard = self.pje_operator_dashboard()
         djen_updates = index["updates"]
         datajud_updates = datajud["rows"]
         pje_updates = self._pje_update_rows_for_user(user["id"], process_numbers)
@@ -4866,6 +5269,10 @@ class JustraApp:
                 "datajud_job_status_counts": datajud.get("job_status_counts") or {},
                 "datajud_rate_limited": bool(datajud.get("rate_limited")),
                 "datajud_cooldown_until": datajud.get("cooldown_until") or "",
+                "pje_jobs_active": int(pje_dashboard.get("summary", {}).get("active") or 0),
+                "pje_jobs_queued_now": pje_queued_now,
+                "pje_jobs_approved": int(pje_dashboard.get("summary", {}).get("approved") or 0),
+                "pje_jobs_running": int(pje_dashboard.get("summary", {}).get("running") or 0),
             },
             "filters": {"category": category_filter, "q": search_query},
             "watches": watch_rows,
@@ -4885,6 +5292,7 @@ class JustraApp:
                 "rate_limited": bool(datajud.get("rate_limited")),
                 "cooldown_until": datajud.get("cooldown_until") or "",
             },
+            "pje_jobs": pje_dashboard.get("summary", {}),
             "generated_at": now_iso(),
         }
 
@@ -5454,7 +5862,10 @@ class JustraApp:
         for owner_id in owner_ids:
             if owner_id in owners_with_case:
                 continue
-            created_case = self.create_case(owner_id, self._pje_case_payload(payload, process_number, page_url))
+            created_case = self.create_case(
+                owner_id,
+                {**self._pje_case_payload(payload, process_number, page_url), "skip_pje_job": True},
+            )
             case_ids.append(created_case["id"])
             created_case_ids.append(created_case["id"])
         unique_case_ids = list(dict.fromkeys(case_ids))
@@ -5528,6 +5939,7 @@ class JustraApp:
         if not dry_run:
             append_jsonl_file(PJE_EXTENSION_IMPORTS_PATH, record)
             promotion = self._promote_pje_extension_import(payload, record)
+            self.mark_pje_jobs_imported(process_number, import_id, promotion, payload)
         return {
             "ok": True,
             "dry_run": dry_run,
@@ -5595,13 +6007,25 @@ class JustraApp:
                     "checked": False,
                 },
             )
+        skip_pje_job = bool(payload.get("skip_pje_job"))
+        pje_job = {}
+        if link_import and compact_process_number(process_number) and not skip_pje_job:
+            pje_job = self.enqueue_pje_job(
+                process_number,
+                reason="user_add",
+                priority=90,
+                user_id=user_id,
+                case_id=case_id,
+                page_url=process_source_url,
+                waiting_user=True,
+            )
         guided_new_process = start_mode == "guided_new_process" and case_type == "new_claimant"
         initial_message = (
             (
                 "Sessão criada a partir do link oficial do processo. "
-                "A Justra abre o PJe em uma nova aba para você resolver o CAPTCHA manualmente no próprio site do Judiciário. "
-                "Depois use a extensão Justra PJe para baixar/enviar os documentos e movimentos visíveis. "
-                "Não tentamos quebrar CAPTCHA nem acessar controles automatizados; se a aba for fechada antes da coleta, este dossiê fica com lembrete para recoletar."
+                "A coleta PJe entrou na fila assistida da Justra. Se ela não terminar rapidamente, você ainda pode abrir o PJe, "
+                "resolver o CAPTCHA manualmente no site do Judiciário e usar a extensão Justra PJe para enviar os dados. "
+                "Não tentamos quebrar CAPTCHA nem armazenar sessão do PJe."
             )
             if link_import
             else (
@@ -5636,7 +6060,8 @@ class JustraApp:
             "import_origin": "pje_public_link" if link_import else "",
             "pje_import": {
                 "status": "awaiting_human_captcha",
-                "status_label": "Coleta PJe pendente",
+                "status_label": "Coleta PJe em fila assistida" if pje_job else "Coleta PJe pendente",
+                "job_id": pje_job.get("id") or "",
                 "source_url": process_source_url,
                 "source_label": self._public_process_url_label(process_source_url),
                 "created_at": created_at,
@@ -6926,15 +7351,29 @@ class JustraApp:
                     raise ValueError("link oficial do PJe não informado")
                 import_state = case.setdefault("pje_import", {})
                 has_previous_capture = bool(import_state.get("last_import_id") or import_state.get("captured_document_count"))
+                process_number = compact_process_number(case.get("process_number") or self._extract_process_number(source_url))
+                pje_job = {}
+                if process_number:
+                    pje_job = self.enqueue_pje_job(
+                        process_number,
+                        reason="user_recollect" if has_previous_capture else "user_add",
+                        priority=100 if has_previous_capture else 90,
+                        user_id=user_id,
+                        case_id=case_id,
+                        page_url=source_url,
+                        force=True,
+                        waiting_user=True,
+                    )
                 import_state.update(
                     {
                         "status": "awaiting_recollection" if has_previous_capture else "awaiting_human_captcha",
-                        "status_label": "Recoleta PJe pendente" if has_previous_capture else "Coleta PJe pendente",
+                        "status_label": "Recoleta PJe em fila assistida" if has_previous_capture else "Coleta PJe em fila assistida",
+                        "job_id": pje_job.get("id") or import_state.get("job_id", ""),
                         "source_url": source_url,
                         "source_label": self._public_process_url_label(source_url),
                         "last_attempt_at": now_iso(),
                         "last_error": "",
-                        "reminder": "Abra o PJe, resolva o CAPTCHA e envie pela extensão Justra PJe.",
+                        "reminder": "A Justra tentará a coleta assistida por operador. Se demorar, abra o PJe e envie pela extensão.",
                     }
                 )
                 task_labels = {normalize(item.get("label") or "") for item in case.get("tasks") or []}
@@ -6949,8 +7388,9 @@ class JustraApp:
                         "id": secrets.token_hex(6),
                         "role": "assistant",
                         "content": (
-                            "Abri uma nova tentativa de coleta PJe. Resolva o CAPTCHA no site do Judiciário "
-                            "e use a extensão Justra PJe para enviar documentos e movimentações para este dossiê."
+                            "Abri uma nova tentativa de coleta PJe e coloquei o processo na fila assistida da Justra. "
+                            "Se não concluirmos em até 1 minuto, siga pelo fluxo manual: abra o PJe, resolva o CAPTCHA "
+                            "e use a extensão Justra PJe para enviar documentos e movimentações."
                         ),
                         "created_at": now_iso(),
                         "sources": ["PJe"],
@@ -9960,6 +10400,17 @@ def make_handler(app: JustraApp):
                 return None
             return user
 
+        def _require_operator(self) -> dict[str, Any] | None:
+            token = self._bearer_token()
+            user = app.user_from_token(token) if token else None
+            if user and user.get("role") == "admin":
+                return {"id": str(user.get("id") or ""), "email": str(user.get("email") or ""), "role": "admin"}
+            configured = os.getenv("JUSTRA_PJE_OPERATOR_TOKEN", "").strip()
+            if configured and token and hmac.compare_digest(token, configured):
+                return {"id": "pje-operator", "email": "operator-token", "role": "operator"}
+            self._send_json({"error": "token de operador obrigatório"}, status=401)
+            return None
+
         def _send_json(self, payload: dict[str, Any], status: int = 200) -> None:
             body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
             self.send_response(status)
@@ -10097,7 +10548,7 @@ def make_handler(app: JustraApp):
                 if path in {"/privacidade", "/privacidade.html", "/politica-de-privacidade"}:
                     self._send_file(SITE_DIR / "privacidade.html")
                     return
-                if path in {"/", "/jurimetria", "/processos-v2", "/processos", "/processos-legado", "/analise-documento", "/atualizacoes", "/prazos", "/entrevista", "/chat", "/radar", "/assinatura", "/auth/google/complete", "/admin/bot", "/admin/mapa", "/admin/coleta", "/admin/djen", "/admin/sql"}:
+                if path in {"/", "/jurimetria", "/processos-v2", "/processos", "/processos-legado", "/analise-documento", "/atualizacoes", "/prazos", "/entrevista", "/chat", "/radar", "/assinatura", "/auth/google/complete", "/admin/bot", "/admin/mapa", "/admin/coleta", "/admin/djen", "/admin/pje", "/admin/sql"}:
                     self._send_file(SITE_DIR / "app.html")
                     return
                 if path.startswith("/assets/"):
@@ -10166,6 +10617,10 @@ def make_handler(app: JustraApp):
                     return
                 if path == "/api/updates":
                     self._send_json(app.updates_dashboard(user, query))
+                    return
+                pje_job_match = re.fullmatch(r"/api/pje/jobs/([^/]+)", path)
+                if pje_job_match:
+                    self._send_json(app.pje_job_status_for_user(user, unquote(pje_job_match.group(1))))
                     return
                 if path == "/api/cases":
                     self._send_json({"cases": app.list_cases(user["id"], query.get("q", [""])[0])})
@@ -10258,6 +10713,9 @@ def make_handler(app: JustraApp):
                 if path == "/api/admin/djen":
                     self._send_json(app.djen_dashboard())
                     return
+                if path == "/api/admin/pje":
+                    self._send_json(app.pje_operator_dashboard())
+                    return
                 if path == "/api/admin/duckdb":
                     admin = self._current_user() or {}
                     self._send_json(app.duckdb_info(admin, self.server.server_address[0], self.server.server_address[1]))
@@ -10318,6 +10776,18 @@ def make_handler(app: JustraApp):
                         self._send_json({"error": "origem não permitida para importação PJe"}, status=403)
                         return
                     self._send_json(app.import_pje_extension_payload(payload, str(self.client_address[0])))
+                    return
+                if parsed.path == "/api/operator/pje/jobs/next":
+                    operator = self._require_operator()
+                    if not operator:
+                        return
+                    self._send_json(app.claim_next_pje_operator_job(str(payload.get("operator_id") or operator.get("email") or operator.get("id") or "")))
+                    return
+                if parsed.path == "/api/operator/pje/jobs/finish":
+                    operator = self._require_operator()
+                    if not operator:
+                        return
+                    self._send_json(app.finish_pje_operator_job(str(payload.get("job_id") or ""), payload))
                     return
                 user = self._require_user()
                 if not user:
@@ -10456,6 +10926,12 @@ def make_handler(app: JustraApp):
                             retry_pending=bool(payload.get("retry_pending")),
                         )
                     )
+                    return
+                if parsed.path == "/api/admin/pje/jobs/action":
+                    admin = self._require_admin()
+                    if not admin:
+                        return
+                    self._send_json(app.admin_pje_job_action(admin, payload))
                     return
                 if parsed.path == "/api/admin/duckdb/query":
                     if not self._require_admin():

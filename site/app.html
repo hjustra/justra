@@ -81,6 +81,10 @@
           <span>Coleta DJEN</span>
           <small id="navDjenState">diário</small>
         </button>
+        <button class="nav-item admin" data-view="pje-operator" title="Fila PJe assistida">
+          <span>PJe operador</span>
+          <small id="navPjeState">fila</small>
+        </button>
         <button class="nav-item admin" data-view="sql" title="DuckDB SQL">
           <span>DuckDB SQL</span>
         </button>
@@ -661,6 +665,67 @@
             <table>
               <thead><tr><th>Prazo/data</th><th>Processo</th><th>Advogado</th><th>Tribunal</th><th>Ato</th><th>Risco</th></tr></thead>
               <tbody id="lawyerDeadlineRows"><tr><td colspan="6" class="muted">Pesquise por nome e, se possível, OAB/UF.</td></tr></tbody>
+            </table>
+          </div>
+        </section>
+      </section>
+
+      <section class="view" id="view-pje-operator">
+        <header class="page-head">
+          <div>
+            <p class="eyebrow">Operação assistida</p>
+            <h1>Fila PJe</h1>
+            <p class="page-lead">Aprovação de coletas que serão executadas pelo agente local do operador, com CAPTCHA resolvido manualmente.</p>
+          </div>
+          <div class="page-actions">
+            <button class="icon-button subtle" id="refreshPjeOperator" type="button">Atualizar</button>
+          </div>
+        </header>
+
+        <section class="collector-control panel">
+          <div>
+            <span class="collector-light" id="pjeOperatorLight"></span>
+            <div>
+              <h2 id="pjeOperatorState">Carregando fila</h2>
+              <p id="pjeOperatorNote">Jobs PJe ficam aqui até aprovação do operador.</p>
+            </div>
+          </div>
+          <div class="collector-actions">
+            <button id="copyPjeAgentCommand" type="button">Copiar comando do agente</button>
+          </div>
+        </section>
+
+        <section class="metric-grid" id="pjeOperatorCards"></section>
+
+        <section class="panel">
+          <div class="section-head">
+            <div>
+              <h2>Agente local</h2>
+              <span class="muted">Rode no Mac do operador; ele só executa jobs aprovados nesta tela.</span>
+            </div>
+          </div>
+          <pre class="operator-command" id="pjeAgentCommand">.venv/bin/python scripts/pje_operator_agent.py --justra-url https://staging.justra.com.br</pre>
+          <p class="muted" id="pjeOperatorTokenHint">Use um token de operador em variável de ambiente ou passe com --token.</p>
+        </section>
+
+        <section class="panel">
+          <div class="section-head">
+            <div><h2>Jobs PJe</h2><span id="pjeOperatorMeta" class="muted">Carregando...</span></div>
+          </div>
+          <div class="table-wrap process-center-table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>Prioridade</th>
+                  <th>Processo</th>
+                  <th>Motivo</th>
+                  <th>Status</th>
+                  <th>Tentativas</th>
+                  <th>Último erro</th>
+                  <th>Ações</th>
+                </tr>
+              </thead>
+              <tbody id="pjeOperatorRows"></tbody>
             </table>
           </div>
         </section>

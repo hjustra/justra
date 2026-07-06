@@ -34,7 +34,7 @@ async ({ expectedCnj, maxDocuments }) => {
   const PROCESS_FORMATTED_RE = /\b\d{7}-\d{2}\.\d{4}\.\d\.\d{2}\.\d{4}\b/;
   const PROCESS_COMPACT_RE = /(?<!\d)(\d{20})(?!\d)/;
   const BR_DATE_RE = /\b(\d{2})\/(\d{2})\/(\d{4})(?:\s+(\d{2}):(\d{2}))?\b/;
-  const DOCUMENT_ITEM_RE = /\b(Senten[çc]a|Decis[ãa]o|Despacho|Ac[óo]rd[ãa]o|Ata(?:\s+de\s+audi[êe]ncia)?|Peti[çc][ãa]o|Certid[ãa]o|Intima[çc][ãa]o|Notifica[çc][ãa]o|Alvar[áa]|Mandado|Of[íi]cio|Termo|C[áa]lculo|Laudo|Manifesta[çc][ãa]o|Recurso|Contrarraz[õo]es|Embargos|Contesta[çãa]o|Inicial)\s*(?:\([^)]{1,100}\))?\s*[-–—]\s*([a-f0-9]{6,40})\b/gi;
+  const DOCUMENT_ITEM_RE = /\b(Senten[çc]a|Decis[ãa]o|Despacho|Ac[óo]rd[ãa]o|Ata(?:\s+d[ae]\s+audi[êe]ncia)?|Peti[çc][ãa]o|Certid[ãa]o|Intima[çc][ãa]o|Notifica[çc][ãa]o|Alvar[áa]|Mandado|Of[íi]cio|Termo|C[áa]lculo|Laudo|Manifesta[çc][ãa]o|Recurso|Contrarraz[õo]es|Embargos|Contesta[çc][ãa]o|Inicial)\s*(?:\([^)]{1,100}\))?\s*[-–—]\s*([a-f0-9]{6,40})\b/gi;
   const MAX_TEXT_CHARS = 90000;
   const MAX_DOCUMENT_TEXT_CHARS = 180000;
 
@@ -186,7 +186,7 @@ async ({ expectedCnj, maxDocuments }) => {
   };
   const detectDocumentType = (text, title) => {
     const value = `${title || ""}\n${text || ""}`;
-    const options = [["sentenca", /\bSenten[çc]a\b/i], ["decisao", /\bDecis[ãa]o\b/i], ["despacho", /\bDespacho\b/i], ["acordao", /\bAc[óo]rd[ãa]o\b/i], ["ata", /\bAta de audi[êe]ncia\b/i], ["peticao", /\bPeti[çc][ãa]o\b/i], ["certidao", /\bCertid[ãa]o\b/i], ["intimacao", /\bIntima[çc][ãa]o\b/i]];
+    const options = [["sentenca", /\bSenten[çc]a\b/i], ["decisao", /\bDecis[ãa]o\b/i], ["despacho", /\bDespacho\b/i], ["acordao", /\bAc[óo]rd[ãa]o\b/i], ["ata", /\bAta d[ae] audi[êe]ncia\b/i], ["peticao", /\bPeti[çc][ãa]o\b/i], ["certidao", /\bCertid[ãa]o\b/i], ["intimacao", /\bIntima[çc][ãa]o\b/i]];
     const match = options.find(([, pattern]) => pattern.test(value));
     return match ? match[0] : "documento";
   };
@@ -518,6 +518,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Coleta PJe assistida por operador humano.")
     parser.add_argument("--cnj", required=True, help="Número CNJ do processo.")
     parser.add_argument("--justra-url", default="https://staging.justra.com.br", help="Base URL da Justra.")
+    parser.add_argument("--job-id", default="", help="ID do job PJe na fila da Justra.")
     parser.add_argument("--pje-url", default="", help="URL PJe já parametrizada. Se omitida, usa TRT2 consulta processual.")
     parser.add_argument("--degree", default="1", help="Grau do processo no PJe. Padrão: 1.")
     parser.add_argument("--timeout", type=int, default=300, help="Tempo máximo aguardando você resolver CAPTCHA/login.")
@@ -576,7 +577,10 @@ def main(argv: list[str] | None = None) -> int:
             "requested_cnj": cnj,
             "requested_url": page_url,
             "justra_url": args.justra_url,
+            "job_id": args.job_id,
         }
+        if args.job_id:
+            payload["job_id"] = args.job_id
         write_payload(payload, output_path)
         print(
             "[pje] JSON salvo em "

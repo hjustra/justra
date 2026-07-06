@@ -17,6 +17,7 @@ const state = {
   radar: null,
   collector: null,
   djen: null,
+  pjeOperator: null,
   pjeExtension: null,
   deadlines: null,
   updates: null,
@@ -46,7 +47,7 @@ const $ = (selector) => document.querySelector(selector);
 const $$ = (selector) => Array.from(document.querySelectorAll(selector));
 const numberFmt = new Intl.NumberFormat("pt-BR");
 const compactFmt = new Intl.NumberFormat("pt-BR", { notation: "compact", maximumFractionDigits: 1 });
-const ADMIN_ONLY_VIEWS = new Set(["jurimetria", "bot", "mapa", "coleta", "djen", "sql"]);
+const ADMIN_ONLY_VIEWS = new Set(["jurimetria", "bot", "mapa", "coleta", "djen", "pje-operator", "sql"]);
 
 function fmt(value) {
   if (value === null || value === undefined || value === "") return "0";
@@ -774,6 +775,8 @@ function setView(view) {
             ? "/admin/coleta"
           : view === "djen"
             ? "/admin/djen"
+          : view === "pje-operator"
+            ? "/admin/pje"
           : view === "sql"
             ? "/admin/sql"
             : "/chat";
@@ -789,6 +792,7 @@ function setView(view) {
   if (state.user && view === "radar") loadRadar();
   if (state.user && view === "coleta") loadCollector();
   if (state.user && view === "djen") loadDjen().catch(() => {});
+  if (state.user && view === "pje-operator") loadPjeOperator().catch(() => {});
   if (state.user && view === "sql") loadDuckdbWorkbench();
   if (state.user && view === "billing") loadBilling();
   if (state.user && view === "jurimetria") loadJurimetrics();
@@ -820,6 +824,7 @@ function initialView() {
   if (location.pathname.includes("/admin/mapa")) return "mapa";
   if (location.pathname.includes("/admin/coleta")) return "coleta";
   if (location.pathname.includes("/admin/djen")) return "djen";
+  if (location.pathname.includes("/admin/pje")) return "pje-operator";
   if (location.pathname.includes("/admin/sql")) return "sql";
   return "processos-v2";
 }
@@ -1726,6 +1731,127 @@ async function runBackfill(startDate, endDate) {
   await loadCollector();
 }
 
+function pjeJobStatusLabel(status) {
+  return {
+    queued: "Aguardando aprovação",
+    operator_requested: "Aprovado para agente",
+    operator_running: "Em execução local",
+    retry_wait: "Aguardando retry",
+    succeeded: "Concluído",
+    manual_required: "Manual necessário",
+    failed: "Falhou",
+    cancelled: "Cancelado",
+  }[status] || status || "—";
+}
+
+function pjeJobReasonLabel(reason) {
+  return {
+    user_add: "Usuário adicionou",
+    user_watch: "Acompanhamento novo",
+    user_recollect: "Recoleta solicitada",
+    scheduled_refresh: "Monitoramento",
+    retry: "Retry",
+  }[reason] || reason || "—";
+}
+
+function pjeJobActionButtons(job = {}) {
+  const status = String(job.status || "");
+  const id = escapeHtml(job.id || "");
+  const approve = status === "queued" || status === "retry_wait" || status === "failed" || status === "manual_required"
+    ? `<button type="button" data-pje-job-action="approve" data-pje-job-id="${id}">Aprovar</button>`
+    : "";
+  const retry = status === "failed" || status === "manual_required" || status === "retry_wait"
+    ? `<button type="button" data-pje-job-action="retry" data-pje-job-id="${id}">Reenfileirar</button>`
+    : "";
+  const manual = !["succeeded", "manual_required", "cancelled"].includes(status)
+    ? `<button type="button" data-pje-job-action="manual_required" data-pje-job-id="${id}">Marcar manual</button>`
+    : "";
+  const cancel = !["succeeded", "cancelled"].includes(status)
+    ? `<button type="button" class="danger" data-pje-job-action="cancel" data-pje-job-id="${id}">Cancelar</button>`
+    : "";
+  return [approve, retry, manual, cancel].filter(Boolean).join("");
+}
+
+function renderPjeOperator(data) {
+  state.pjeOperator = data;
+  const summary = data.summary || {};
+  const active = Number(summary.active || 0);
+  const approved = Number(summary.approved || 0);
+  const running = Number(summary.running || 0);
+  $("#navPjeState").textContent = running ? "executando" : approved ? `${fmt(approved)} aprov.` : active ? `${fmt(active)} pend.` : "ok";
+  $("#pjeOperatorState").textContent = running
+    ? "Agente executando coleta"
+    : approved
+      ? "Jobs aprovados aguardando agente local"
+      : active
+        ? "Jobs aguardando aprovação"
+        : "Fila sem pendências";
+  $("#pjeOperatorLight").className = `collector-light ${running ? "running" : active ? "enabled" : "stopped"}`;
+  $("#pjeOperatorNote").textContent = data.operator?.token_configured
+    ? "Token de operador configurado. O agente local pode puxar jobs aprovados."
+    : "Configure JUSTRA_PJE_OPERATOR_TOKEN no staging ou rode o agente com um token admin.";
+  const command = data.operator?.agent_command || ".venv/bin/python scripts/pje_operator_agent.py --justra-url https://staging.justra.com.br";
+  $("#pjeAgentCommand").textContent = command;
+  $("#pjeOperatorTokenHint").textContent = data.operator?.token_configured
+    ? "No Mac, exporte JUSTRA_PJE_OPERATOR_TOKEN antes de rodar o agente."
+    : "Sem token de operador configurado; o agente aceita um token admin via --token.";
+  renderCards($("#pjeOperatorCards"), [
+    { label: "Ativos", value: fmt(summary.active), note: "fila + aprovados + execução" },
+    { label: "Aguardando", value: fmt(summary.queued), note: "precisam aprovação" },
+    { label: "Aprovados", value: fmt(summary.approved), note: "agente pode executar" },
+    { label: "Executando", value: fmt(summary.running), note: "Chrome local" },
+    { label: "Concluídos", value: fmt(summary.succeeded), note: "captura aplicada" },
+    { label: "Falhas", value: fmt(Number(summary.failed || 0) + Number(summary.manual_required || 0)), note: "revisão/manual" },
+  ]);
+  const jobs = data.jobs || [];
+  $("#pjeOperatorMeta").textContent = `${fmt(jobs.length)} jobs listados · atualizado ${fmtMoment(data.generated_at)}`;
+  $("#pjeOperatorRows").innerHTML = jobs.length
+    ? jobs.map((job) => {
+        const waiting = job.waiting_user_until ? `<br><span class="muted">SLA usuário: ${escapeHtml(fmtMoment(job.waiting_user_until))}</span>` : "";
+        const title = job.case_title ? `<br><span class="muted">${escapeHtml(short(job.case_title, 80))}</span>` : "";
+        const locked = job.locked_by ? `<br><span class="muted">${escapeHtml(job.locked_by)} · ${escapeHtml(fmtMoment(job.locked_at))}</span>` : "";
+        return `<tr>
+          <td><strong>${fmt(job.priority)}</strong>${waiting}</td>
+          <td><strong>${escapeHtml(job.process_number || job.process_number_digits || "—")}</strong>${title}<br><span class="muted">${escapeHtml(job.tribunal || "—")} · ${fmt(job.case_count)} caso(s)</span></td>
+          <td>${escapeHtml(pjeJobReasonLabel(job.reason))}<br><span class="muted">${escapeHtml(short(job.page_url || "", 64))}</span></td>
+          <td>${statusBadge(pjeJobStatusLabel(job.status))}${locked}</td>
+          <td>${fmt(job.attempts)} / ${fmt(job.max_attempts)}</td>
+          <td>${escapeHtml(short(job.last_error || "—", 110))}</td>
+          <td class="process-center-actions">${pjeJobActionButtons(job)}</td>
+        </tr>`;
+      }).join("")
+    : `<tr><td colspan="7" class="muted">Nenhum job PJe criado ainda.</td></tr>`;
+}
+
+async function loadPjeOperator(options = {}) {
+  const silent = Boolean(options.silent);
+  if (!silent && $("#pjeOperatorState")) {
+    $("#pjeOperatorState").textContent = "Atualizando fila";
+  }
+  const data = await api("/api/admin/pje");
+  renderPjeOperator(data);
+  return data;
+}
+
+async function runPjeJobAction(jobId, action) {
+  await api("/api/admin/pje/jobs/action", {
+    method: "POST",
+    body: JSON.stringify({ job_id: jobId, action }),
+  });
+  await loadPjeOperator();
+}
+
+async function copyPjeAgentCommand() {
+  const command = $("#pjeAgentCommand")?.textContent || "";
+  if (!command) return;
+  try {
+    await navigator.clipboard.writeText(command);
+    $("#pjeOperatorNote").textContent = "Comando do agente copiado.";
+  } catch {
+    $("#pjeOperatorNote").textContent = "Não consegui copiar automaticamente. Selecione o comando e copie manualmente.";
+  }
+}
+
 function renderDjen(data) {
   state.djen = data;
   const running = data.runtime?.state === "running";
@@ -2520,6 +2646,33 @@ function pjeCollectionUrl(caseItem = {}) {
     || officialPjeUrlForProcessNumber(caseItem.process_number || "");
 }
 
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+async function waitForPjeAssistedJob(caseItem = {}, statusSelector = "#processCenterStatus") {
+  const jobId = caseItem.pje_import?.job_id || "";
+  const statusEl = $(statusSelector);
+  if (!jobId) return false;
+  const deadline = Date.now() + 60_000;
+  while (Date.now() < deadline) {
+    await sleep(3000);
+    const data = await api(`/api/pje/jobs/${encodeURIComponent(jobId)}`);
+    const job = data.job || {};
+    const status = String(job.status || "");
+    if (statusEl) {
+      statusEl.textContent = status === "operator_running"
+        ? "Operador coletando PJe agora. Aguarde mais um instante..."
+        : status === "operator_requested"
+          ? "Coleta PJe aprovada; aguardando agente local."
+          : "Coleta PJe na fila assistida. Se passar de 1 minuto, abriremos o fluxo manual.";
+    }
+    if (status === "succeeded") return true;
+    if (["manual_required", "failed", "cancelled"].includes(status)) return false;
+  }
+  return false;
+}
+
 function casePjeCollectionPending(caseItem = {}) {
   const importState = caseItem.pje_import || {};
   const hasPjeLink = Boolean(pjeCollectionUrl(caseItem));
@@ -2791,20 +2944,26 @@ async function addProcessCenterProcess() {
     return;
   }
   const pjeUrl = officialPjeUrlForProcessNumber(processNumber);
-  const opened = pjeUrl ? window.open(pjeUrl, "_blank") : null;
-  if (opened) opened.opener = null;
-  $("#processCenterStatus").textContent = "Cadastrando processo, abrindo PJe e ativando acompanhamento...";
+  $("#processCenterStatus").textContent = "Cadastrando processo e colocando PJe na fila assistida...";
   const caseItem = await ensureProcessCenterCase(processNumber, { process_source_url: pjeUrl });
   await api("/api/updates/watch", {
     method: "POST",
     body: JSON.stringify({ process_number: processNumber }),
   }).catch(() => {});
   input.value = "";
-  $("#processCenterStatus").textContent = opened
-    ? "Processo cadastrado. Resolva o CAPTCHA no PJe e envie pela extensão; enquanto isso, vamos consultar DJEN/DataJud."
-    : "Processo cadastrado. O navegador bloqueou a aba do PJe; use o botão Coletar PJe. Enquanto isso, vamos consultar DJEN/DataJud.";
+  $("#processCenterStatus").textContent = "Processo cadastrado. Estamos tentando a coleta PJe assistida por até 1 minuto; DJEN/DataJud seguem em paralelo.";
   await loadProcessCenter({ refreshDatajud: true });
-  $("#processCenterStatus").textContent = `${caseItem.title || processNumber} está em acompanhamento. A coleta PJe fica pendente até o envio pela extensão.`;
+  const collected = await waitForPjeAssistedJob(caseItem);
+  if (collected) {
+    $("#processCenterStatus").textContent = "PJe coletado pelo operador. Atualizando o processo...";
+    await loadProcessCenter().catch(() => {});
+    return;
+  }
+  const opened = pjeUrl ? window.open(pjeUrl, "_blank") : null;
+  if (opened) opened.opener = null;
+  $("#processCenterStatus").textContent = opened
+    ? "Não concluímos a coleta assistida em 1 minuto. PJe aberto para fluxo manual com extensão."
+    : "Não concluímos a coleta assistida em 1 minuto. Use o botão Coletar PJe para abrir o fluxo manual.";
   window.setTimeout(() => loadProcessCenter().catch(() => {}), 5000);
 }
 
@@ -2812,8 +2971,6 @@ async function openPjeCollectionForCase(caseId) {
   const caseItem = (state.cases || []).find((item) => item.id === caseId) || state.selectedCase || {};
   const pjeUrl = pjeCollectionUrl(caseItem);
   if (!caseItem.id || !pjeUrl) throw new Error("não encontrei link PJe para este processo");
-  const opened = window.open(pjeUrl, "_blank");
-  if (opened) opened.opener = null;
   const data = await api("/api/cases/action", {
     method: "POST",
     body: JSON.stringify({
@@ -2827,8 +2984,18 @@ async function openPjeCollectionForCase(caseId) {
     renderCaseWorkspace();
   }
   await loadProcessCenter().catch(() => {});
+  $("#processCenterStatus").textContent = "Recoleta PJe enviada para a fila assistida. Aguardando até 1 minuto antes do fallback manual.";
+  const collected = await waitForPjeAssistedJob(data.case || caseItem);
+  if (collected) {
+    $("#processCenterStatus").textContent = "Recoleta PJe concluída pelo operador.";
+    await loadProcessCenter().catch(() => {});
+    if (state.selectedCase?.id === caseItem.id) await refreshSelectedCase(caseItem.id);
+    return;
+  }
+  const opened = window.open(pjeUrl, "_blank");
+  if (opened) opened.opener = null;
   $("#processCenterStatus").textContent = opened
-    ? "PJe aberto. Resolva o CAPTCHA e envie pela extensão Justra PJe."
+    ? "Coleta assistida não concluiu em 1 minuto. PJe aberto para fluxo manual com extensão."
     : "O navegador bloqueou a aba. Abra o link oficial pelo dossiê e envie pela extensão Justra PJe.";
 }
 
@@ -4880,6 +5047,22 @@ function bindEvents() {
       $("#backfillRunNote").textContent = `Erro: ${err.message}`;
     });
   });
+  $("#refreshPjeOperator")?.addEventListener("click", () => loadPjeOperator().catch((err) => {
+    $("#pjeOperatorNote").textContent = `Erro: ${err.message}`;
+  }));
+  $("#copyPjeAgentCommand")?.addEventListener("click", () => copyPjeAgentCommand());
+  $("#pjeOperatorRows")?.addEventListener("click", (event) => {
+    const button = event.target.closest("[data-pje-job-action]");
+    if (!button) return;
+    button.disabled = true;
+    runPjeJobAction(button.dataset.pjeJobId, button.dataset.pjeJobAction)
+      .catch((err) => {
+        $("#pjeOperatorNote").textContent = `Erro: ${err.message}`;
+      })
+      .finally(() => {
+        button.disabled = false;
+      });
+  });
   $("#refreshDjen").addEventListener("click", () => loadDjen().catch(() => {}));
   $("#enableDjen").addEventListener("click", () => setDjenEnabled(true).catch((err) => {
     $("#djenControlNote").textContent = `Erro: ${err.message}`;
@@ -4971,7 +5154,11 @@ async function loadAppData() {
   if (view === "radar") await loadRadar();
   if (view === "coleta") await loadCollector();
   if (view === "djen") await loadDjen().catch(() => {});
+  if (view === "pje-operator") await loadPjeOperator().catch(() => {});
   if (view === "sql") await loadDuckdbWorkbench();
+  if (state.user?.role === "admin" && view !== "pje-operator") {
+    loadPjeOperator({ silent: true }).catch(() => {});
+  }
 }
 
 async function init() {
