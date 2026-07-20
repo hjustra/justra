@@ -76,6 +76,7 @@ Quando a central de atualizações roda, o backend cria jobs `scheduled_refresh`
 - `retry_wait`: falha transitória aguardando retry.
 - `succeeded`: import recebido e aplicado.
 - `manual_required`: revisão/coleta manual necessária.
+- `blocked_by_origin`: PJe/CloudFront bloqueou a origem/IP do worker antes do CAPTCHA.
 - `failed`: falha final após limite de tentativas.
 - `cancelled`: cancelado.
 
