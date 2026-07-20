@@ -12,6 +12,7 @@ import json
 import mimetypes
 import os
 import re
+import sys
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
@@ -24,6 +25,12 @@ DEFAULT_PAGE_URL = "https://pje.trt2.jus.br/consultaprocessual/captcha/detalhe-p
 DEFAULT_OUTPUT_DIR = Path("captcha_output")
 DEFAULT_AZURE_OPENAI_ENDPOINT = "https://optti-oa-us.openai.azure.com/"
 DEFAULT_AZURE_OPENAI_DEPLOYMENT = "gpt-4.1-mini"
+ORIGIN_BLOCK_MARKER = "PJE_ORIGIN_BLOCKED"
+ORIGIN_BLOCK_EXIT_CODE = 12
+
+
+class OriginBlockedError(RuntimeError):
+    """A origem do worker foi bloqueada antes da página PJe carregar."""
 
 
 @dataclass(frozen=True)
@@ -251,6 +258,38 @@ def read_image_text(image_path: str | Path, config: Config) -> str:
     return texto_limpo
 
 
+def looks_like_origin_block(status: int, content_type: str, text: str) -> bool:
+    lowered = (text or "").lower()
+    return (
+        int(status or 0) == 403
+        and "text/html" in (content_type or "").lower()
+        and (
+            "the request could not be satisfied" in lowered
+            or "request blocked" in lowered
+            or "403 error" in lowered
+        )
+    )
+
+
+def origin_block_message(status: int, url: str, text: str = "") -> str:
+    snippet = re.sub(r"\s+", " ", text or "").strip()[:180]
+    suffix = f" · {snippet}" if snippet else ""
+    return f"HTTP {status} ao abrir PJe; a origem/IP do worker foi bloqueada antes do CAPTCHA. URL: {url}{suffix}"
+
+
+async def current_page_origin_block_message(page: Any) -> str:
+    try:
+        text = await page.evaluate(
+            "() => (document.body && document.body.innerText) || document.documentElement.innerText || ''"
+        )
+    except Exception:
+        return ""
+    lowered = (text or "").lower()
+    if "403 error" in lowered and "the request could not be satisfied" in lowered:
+        return origin_block_message(403, page.url, text)
+    return ""
+
+
 async def wait_for_pje_operator_collect_ready(
     page: Any,
     cnj: str,
@@ -366,6 +405,7 @@ async def main(config: Config) -> int:
 
     image_future: asyncio.Future[dict[str, Any]] = asyncio.Future()
     audio_future: asyncio.Future[dict[str, Any]] = asyncio.Future()
+    origin_block_future: asyncio.Future[str] = asyncio.Future()
 
     async with async_playwright() as p:
         browser = await p.chromium.launch(headless=config.headless)
@@ -435,6 +475,13 @@ async def main(config: Config) -> int:
                     return
 
                 print("TEXTO COMEÇO:", text[:300].replace("\n", " "))
+
+                if looks_like_origin_block(status, content_type, text):
+                    message = origin_block_message(status, url, text)
+                    if not origin_block_future.done():
+                        origin_block_future.set_result(message)
+                    print(f"{ORIGIN_BLOCK_MARKER}: {message}")
+                    return
 
                 try:
                     data = json.loads(text)
@@ -513,6 +560,13 @@ async def main(config: Config) -> int:
             )
 
             print("\nPágina aberta.")
+            if origin_block_future.done():
+                raise OriginBlockedError(origin_block_future.result())
+
+            page_block_message = await current_page_origin_block_message(page)
+            if page_block_message:
+                raise OriginBlockedError(page_block_message)
+
             print("Aguardando captura da imagem do CAPTCHA...")
 
             try:
@@ -562,4 +616,8 @@ async def main(config: Config) -> int:
 
 if __name__ == "__main__":
     config = parse_args()
-    raise SystemExit(asyncio.run(main(config)))
+    try:
+        raise SystemExit(asyncio.run(main(config)))
+    except OriginBlockedError as exc:
+        print(f"{ORIGIN_BLOCK_MARKER}: {exc}", file=sys.stderr)
+        raise SystemExit(ORIGIN_BLOCK_EXIT_CODE)

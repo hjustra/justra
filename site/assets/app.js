@@ -1739,6 +1739,7 @@ function pjeJobStatusLabel(status) {
     retry_wait: "Aguardando retry",
     succeeded: "Concluído",
     manual_required: "Manual necessário",
+    blocked_by_origin: "Origem bloqueada",
     failed: "Falhou",
     cancelled: "Cancelado",
   }[status] || status || "—";
@@ -1757,10 +1758,10 @@ function pjeJobReasonLabel(reason) {
 function pjeJobActionButtons(job = {}) {
   const status = String(job.status || "");
   const id = escapeHtml(job.id || "");
-  const retry = status === "failed" || status === "manual_required" || status === "retry_wait"
+  const retry = status === "failed" || status === "manual_required" || status === "retry_wait" || status === "blocked_by_origin"
     ? `<button type="button" data-pje-job-action="retry" data-pje-job-id="${id}">Reenfileirar</button>`
     : "";
-  const manual = !["succeeded", "manual_required", "cancelled"].includes(status)
+  const manual = !["succeeded", "manual_required", "cancelled", "blocked_by_origin"].includes(status)
     ? `<button type="button" data-pje-job-action="manual_required" data-pje-job-id="${id}">Marcar manual</button>`
     : "";
   const cancel = !["succeeded", "cancelled"].includes(status)
@@ -1798,6 +1799,7 @@ function renderPjeOperator(data) {
     { label: "Retry", value: fmt(summary.retry_wait), note: "aguardando nova tentativa" },
     { label: "Executando", value: fmt(summary.running), note: "coletor headless" },
     { label: "Concluídos", value: fmt(summary.succeeded), note: "captura aplicada" },
+    { label: "Bloqueados", value: fmt(summary.blocked_by_origin), note: "origem/IP rejeitado" },
     { label: "Falhas", value: fmt(Number(summary.failed || 0) + Number(summary.manual_required || 0)), note: "revisão/manual" },
   ]);
   const jobs = data.jobs || [];
@@ -2662,10 +2664,12 @@ async function waitForPjeAssistedJob(caseItem = {}, statusSelector = "#processCe
         ? "Worker PJe coletando agora. Aguarde mais um instante..."
         : status === "retry_wait"
           ? "Coleta PJe falhou e ficou agendada para retry automático."
+          : status === "blocked_by_origin"
+            ? "O PJe bloqueou a origem do worker automático. Use a coleta manual/extensão por enquanto."
           : "Coleta PJe na fila automática. Você pode acompanhar em PJe operador.";
     }
     if (status === "succeeded") return true;
-    if (["manual_required", "failed", "cancelled"].includes(status)) return false;
+    if (["manual_required", "failed", "cancelled", "blocked_by_origin"].includes(status)) return false;
   }
   return false;
 }

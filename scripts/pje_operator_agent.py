@@ -20,6 +20,8 @@ from typing import Any
 import requests
 
 ROOT = Path(__file__).resolve().parents[1]
+ORIGIN_BLOCK_MARKER = "PJE_ORIGIN_BLOCKED"
+ORIGIN_BLOCK_EXIT_CODE = 12
 
 
 def short_tail(value: str, limit: int = 12_000) -> str:
@@ -98,6 +100,19 @@ def run_collector(job: dict[str, Any], justra_url: str, extra_args: list[str]) -
     )
 
 
+def collector_failure_kind(completed: subprocess.CompletedProcess[str]) -> str:
+    output = f"{completed.stdout or ''}\n{completed.stderr or ''}"
+    if completed.returncode == ORIGIN_BLOCK_EXIT_CODE or ORIGIN_BLOCK_MARKER in output:
+        return "blocked_by_origin"
+    return ""
+
+
+def collector_error_message(completed: subprocess.CompletedProcess[str], failure_kind: str) -> str:
+    if failure_kind == "blocked_by_origin":
+        return "PJe bloqueou a origem/IP do worker antes do CAPTCHA (HTTP 403/CloudFront)."
+    return short_tail(completed.stderr or completed.stdout or "coletor retornou erro", 1000)
+
+
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Busca jobs PJe na Justra e executa a coleta automática.")
     parser.add_argument("--justra-url", default="https://staging.justra.com.br", help="Base URL da Justra.")
@@ -157,17 +172,19 @@ def main(argv: list[str] | None = None) -> int:
             if completed.stderr:
                 print(completed.stderr, file=sys.stderr)
             ok = completed.returncode == 0
+            failure_kind = "" if ok else collector_failure_kind(completed)
             result = {
                 "returncode": completed.returncode,
                 "stdout_tail": short_tail(completed.stdout),
                 "stderr_tail": short_tail(completed.stderr),
+                "failure_kind": failure_kind,
             }
             finish_job(
                 args.justra_url,
                 token,
                 job_id,
                 ok,
-                error="" if ok else short_tail(completed.stderr or completed.stdout or "coletor retornou erro", 1000),
+                error="" if ok else collector_error_message(completed, failure_kind),
                 result=result,
             )
             if not ok and args.once:

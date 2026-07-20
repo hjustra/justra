@@ -74,7 +74,9 @@ DATAJUD_JOB_STATUS_ACTIVE = {"queued", "retry", "rate_limited", "running"}
 PJE_JOB_ACTIVE_STATUS = {"queued", "operator_requested", "operator_running", "retry_wait"}
 PJE_JOB_WAITING_STATUS = {"queued", "operator_requested", "retry_wait"}
 PJE_JOB_CLAIMABLE_STATUS = {"queued", "operator_requested", "retry_wait"}
+PJE_JOB_ORIGIN_BLOCKED_STATUS = "blocked_by_origin"
 PJE_JOB_MAX_ATTEMPTS = 3
+PJE_JOB_STALE_LOCK_MINUTES = 20
 PJE_USER_WAIT_SECONDS = 60
 PJE_OPERATOR_RETRY_MINUTES = 10
 DATAJUD_LABOR_COURTS = [f"trt{number}" for number in range(1, 25)] + ["tst"]
@@ -3287,6 +3289,40 @@ class JustraApp:
             if isinstance(job, dict) and str(job.get("status") or "") in PJE_JOB_ACTIVE_STATUS
         )
 
+    def _unlock_stale_pje_jobs_locked(self) -> int:
+        jobs = self.pje_jobs.get("jobs") or {}
+        changed = False
+        unlocked = 0
+        now = datetime.now()
+        for job in jobs.values():
+            if not isinstance(job, dict) or str(job.get("status") or "") != "operator_running":
+                continue
+            locked_at = self._parse_iso_datetime(job.get("locked_at"))
+            if locked_at and now - locked_at <= timedelta(minutes=PJE_JOB_STALE_LOCK_MINUTES):
+                continue
+            attempts = int(job.get("attempts") or 0)
+            max_attempts = int(job.get("max_attempts") or PJE_JOB_MAX_ATTEMPTS)
+            if attempts >= max_attempts:
+                job["status"] = "failed"
+                job["next_run_at"] = ""
+            else:
+                job["status"] = "retry_wait"
+                job["next_run_at"] = now.isoformat(timespec="seconds")
+            job["last_error"] = str(
+                job.get("last_error")
+                or f"lock PJe expirou após {PJE_JOB_STALE_LOCK_MINUTES} min sem retorno do worker"
+            )[:500]
+            job["locked_by"] = ""
+            job["locked_at"] = ""
+            job["updated_at"] = now_iso()
+            changed = True
+            unlocked += 1
+        if changed:
+            self.pje_jobs.setdefault("worker", {})["last_stale_unlock_at"] = now_iso()
+            self.pje_jobs.setdefault("worker", {})["last_stale_unlock_count"] = unlocked
+            self._save_pje_jobs()
+        return unlocked
+
     def _pje_job_user_has_process(self, user_id: str, process_number: str) -> bool:
         compact = compact_process_number(process_number)
         if not compact:
@@ -3366,7 +3402,7 @@ class JustraApp:
             jobs = self.pje_jobs.setdefault("jobs", {})
             existing = jobs.get(job_id) if isinstance(jobs.get(job_id), dict) else {}
             status = str(existing.get("status") or "")
-            should_reset = force or status not in PJE_JOB_ACTIVE_STATUS
+            should_reset = force or (status not in PJE_JOB_ACTIVE_STATUS and status != PJE_JOB_ORIGIN_BLOCKED_STATUS)
             waiting_until = existing.get("waiting_user_until") or ""
             if waiting_user:
                 waiting_until = (datetime.now() + timedelta(seconds=PJE_USER_WAIT_SECONDS)).isoformat(timespec="seconds")
@@ -3422,7 +3458,7 @@ class JustraApp:
                 existing = self.pje_jobs.get("jobs", {}).get(job_id)
                 if isinstance(existing, dict) and str(existing.get("status") or "") in PJE_JOB_ACTIVE_STATUS:
                     continue
-                if isinstance(existing, dict) and str(existing.get("status") or "") in {"manual_required", "failed"}:
+                if isinstance(existing, dict) and str(existing.get("status") or "") in {"manual_required", "failed", PJE_JOB_ORIGIN_BLOCKED_STATUS}:
                     continue
                 if isinstance(existing, dict) and str(existing.get("status") or "") == "succeeded":
                     captured_at = self._parse_iso_datetime(existing.get("last_capture_at"))
@@ -3456,6 +3492,7 @@ class JustraApp:
 
     def pje_operator_dashboard(self) -> dict[str, Any]:
         with self.pje_jobs_lock:
+            self._unlock_stale_pje_jobs_locked()
             jobs = [self._pje_job_public(job) for job in (self.pje_jobs.get("jobs") or {}).values() if isinstance(job, dict)]
             status_counts = Counter(str(job.get("status") or "unknown") for job in jobs)
             worker = copy.deepcopy(self.pje_jobs.get("worker") or {})
@@ -3474,6 +3511,7 @@ class JustraApp:
                 "retry_wait": int(status_counts.get("retry_wait", 0)),
                 "succeeded": int(status_counts.get("succeeded", 0)),
                 "manual_required": int(status_counts.get("manual_required", 0)),
+                "blocked_by_origin": int(status_counts.get(PJE_JOB_ORIGIN_BLOCKED_STATUS, 0)),
                 "failed": int(status_counts.get("failed", 0)),
             },
             "jobs": jobs[:200],
@@ -3503,6 +3541,7 @@ class JustraApp:
         if not job_id:
             raise ValueError("job não informado")
         with self.pje_jobs_lock:
+            self._unlock_stale_pje_jobs_locked()
             jobs = self.pje_jobs.setdefault("jobs", {})
             job = jobs.get(job_id)
             if not isinstance(job, dict):
@@ -3533,6 +3572,7 @@ class JustraApp:
         operator = re.sub(r"[^A-Za-z0-9_.@-]+", "-", str(operator_id or "")).strip("-")[:80] or f"operator-{secrets.token_hex(3)}"
         now_dt = datetime.now()
         with self.pje_jobs_lock:
+            self._unlock_stale_pje_jobs_locked()
             candidates = []
             for job in (self.pje_jobs.get("jobs") or {}).values():
                 if not isinstance(job, dict) or str(job.get("status") or "") not in PJE_JOB_CLAIMABLE_STATUS:
@@ -3585,8 +3625,12 @@ class JustraApp:
             else:
                 attempts = int(job.get("attempts") or 0)
                 max_attempts = int(job.get("max_attempts") or PJE_JOB_MAX_ATTEMPTS)
+                failure_kind = str(result.get("failure_kind") or "").strip()
                 job["last_error"] = error or "falha no worker PJe"
-                if attempts < max_attempts:
+                if failure_kind == PJE_JOB_ORIGIN_BLOCKED_STATUS or "PJe bloqueou a origem/IP" in job["last_error"]:
+                    job["status"] = PJE_JOB_ORIGIN_BLOCKED_STATUS
+                    job["next_run_at"] = ""
+                elif attempts < max_attempts:
                     job["status"] = "retry_wait"
                     job["next_run_at"] = (datetime.now() + timedelta(minutes=PJE_OPERATOR_RETRY_MINUTES)).isoformat(timespec="seconds")
                 else:
