@@ -31,7 +31,7 @@ ORIGIN_BLOCK_EXIT_CODE = 12
 
 def redact_pje_log_value(value: str) -> str:
     text = str(value or "")
-    text = re.sub(r"(?i)(tokenDesafio|tokenCaptcha|resposta)=([^&\\s]+)", r"\1=<redacted>", text)
+    text = re.sub(r"(?i)(tokenDesafio|tokenCaptcha|resposta)=([^&\s]+)", r"\1=<redacted>", text)
     text = re.sub(r'(?i)("tokenDesafio"\\s*:\\s*")[^"]+(")', r"\1<redacted>\2", text)
     text = re.sub(r'(?i)("tokenCaptcha"\\s*:\\s*")[^"]+(")', r"\1<redacted>\2", text)
     text = re.sub(r'(?i)("imagem"\\s*:\\s*")[^"]+(")', r"\1<base64-redacted>\2", text)
