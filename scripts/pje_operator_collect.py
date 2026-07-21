@@ -29,6 +29,16 @@ ORIGIN_BLOCK_MARKER = "PJE_ORIGIN_BLOCKED"
 ORIGIN_BLOCK_EXIT_CODE = 12
 
 
+def redact_pje_log_value(value: str) -> str:
+    text = str(value or "")
+    text = re.sub(r"(?i)(tokenDesafio|tokenCaptcha|resposta)=([^&\\s]+)", r"\1=<redacted>", text)
+    text = re.sub(r'(?i)("tokenDesafio"\\s*:\\s*")[^"]+(")', r"\1<redacted>\2", text)
+    text = re.sub(r'(?i)("tokenCaptcha"\\s*:\\s*")[^"]+(")', r"\1<redacted>\2", text)
+    text = re.sub(r'(?i)("imagem"\\s*:\\s*")[^"]+(")', r"\1<base64-redacted>\2", text)
+    text = re.sub(r'(?i)("audio"\\s*:\\s*")[^"]+(")', r"\1<base64-redacted>\2", text)
+    return text
+
+
 class OriginBlockedError(RuntimeError):
     """A origem do worker foi bloqueada antes da página PJe carregar."""
 
@@ -442,7 +452,7 @@ async def main(config: Config) -> int:
                     return
 
                 print("\n--- RESPONSE RELEVANTE ---")
-                print("URL:", url)
+                print("URL:", redact_pje_log_value(url))
                 print("STATUS:", status)
                 print("CONTENT-TYPE:", content_type)
 
@@ -468,13 +478,21 @@ async def main(config: Config) -> int:
 
                     return
 
-                try:
-                    text = await response.text()
-                except Exception as e:
-                    print("Não consegui ler response.text():", repr(e))
+                is_textual = (
+                    "application/json" in lower_ct
+                    or lower_ct.startswith("text/")
+                    or "html" in lower_ct
+                    or "xml" in lower_ct
+                )
+                if not is_textual:
+                    print("CORPO: resposta binária omitida do log.")
                     return
 
-                print("TEXTO COMEÇO:", text[:300].replace("\n", " "))
+                try:
+                    text = await response.text()
+                except Exception:
+                    print("CORPO: não foi possível ler resposta textual.")
+                    return
 
                 if looks_like_origin_block(status, content_type, text):
                     message = origin_block_message(status, url, text)
@@ -486,7 +504,13 @@ async def main(config: Config) -> int:
                 try:
                     data = json.loads(text)
                 except Exception:
+                    print("TEXTO COMEÇO:", redact_pje_log_value(text[:300].replace("\n", " ")))
                     return
+
+                if isinstance(data, dict):
+                    print("JSON keys:", ", ".join(sorted(str(key) for key in data.keys())[:12]))
+                elif isinstance(data, list):
+                    print("JSON list items:", len(data))
 
                 token = find_key_recursively(data, "tokenDesafio")
                 imagem = find_key_recursively(data, "imagem")
@@ -572,13 +596,12 @@ async def main(config: Config) -> int:
             try:
                 image_result = await asyncio.wait_for(image_future, timeout=30)
                 print("\nCaptcha de imagem capturado com sucesso.")
-                print(image_result)
+                print("Imagem do CAPTCHA:", image_result.get("image_path"))
 
                 texto = read_image_text(image_result["image_path"], config)
                 captcha_texto = re.sub(r"\s+", "", texto).strip()
 
-                print("Texto transcrito:", texto)
-                print("Texto sem espaços:", captcha_texto)
+                print("Texto do CAPTCHA transcrito.")
 
                 campo_captcha = page.locator(
                     "input[name='captcha'], "

@@ -35,6 +35,7 @@ fi
 
 mkdir -p "${BASE_DIR}" "${DATA_DIR}" "${LOG_DIR}" /etc/justra
 chown -R justra:justra "${BASE_DIR}" "${DATA_DIR}" "${LOG_DIR}"
+chown root:justra /etc/justra
 chmod 750 "${DATA_DIR}" "${LOG_DIR}" /etc/justra
 
 install -d -m 700 -o justra -g justra /home/justra/.ssh
