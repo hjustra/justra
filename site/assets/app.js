@@ -1582,8 +1582,9 @@ function setCollectorTab(tab) {
 
 function renderBackfillPlan(data) {
   const plan = data.backfill_plan || { windows: [] };
-  const running = data.runtime.state === "running";
+  const running = ["running", "collecting", "syncing"].includes(data.runtime.state);
   const blocked = Boolean(data.control.blocked);
+  const manualActions = data.manual_actions_enabled !== false;
   const strategyReview = Boolean(data.control.strategy_review_required);
   $("#backfillPlanMeta").textContent = `${plan.start_date || "—"} a ${plan.end_date || "—"} · ${fmt(plan.days)} janelas`;
   renderCards($("#backfillCards"), [
@@ -1600,12 +1601,12 @@ function renderBackfillPlan(data) {
   end.max = plan.end_date || "";
   if (!start.value) start.value = plan.start_date || "";
   if (!end.value) end.value = plan.end_date || "";
-  $("#runBackfillRange").disabled = running || blocked || !data.control.enabled;
+  $("#runBackfillRange").disabled = !manualActions || running || blocked || !data.control.enabled;
   $("#backfillWindowRows").innerHTML = (plan.windows || []).map((windowItem) => {
     const completed = (windowItem.completed_collections || []).length;
     const missing = (windowItem.missing_collections || []).map(collectorCollectionLabel).join(", ");
     const statusLabel = { complete: "Completa", partial: "Parcial", pending: "Pendente" }[windowItem.status] || windowItem.status;
-    const disabled = running || blocked || !data.control.enabled || windowItem.status === "complete";
+    const disabled = !manualActions || running || blocked || !data.control.enabled || windowItem.status === "complete";
     return `<tr>
       <td><strong>${escapeHtml(windowItem.date)}</strong>${windowItem.is_d1 ? `<small class="window-d1">D-1</small>` : ""}</td>
       <td><span class="window-status ${escapeHtml(windowItem.status)}">${escapeHtml(statusLabel)}</span></td>
@@ -1621,26 +1622,28 @@ function renderCollector(data) {
   state.collector = data;
   const blocked = Boolean(data.control.blocked);
   const strategyReview = Boolean(data.control.strategy_review_required);
-  const running = data.runtime.state === "running";
+  const running = ["running", "collecting", "syncing"].includes(data.runtime.state);
   const enabled = Boolean(data.control.enabled);
+  const manualActions = data.manual_actions_enabled !== false;
+  const backendLabel = data.execution_backend_label || "Azure local";
   const runningLabel = data.runtime.mode === "backfill" ? "Executando backfill" : "Coletando D-1";
   const stateLabel = strategyReview ? "Revisão de estratégia exigida" : blocked ? `Bloqueado · HTTP ${data.control.block_status || "?"}` : running ? runningLabel : enabled ? "Ligado · aguardando execução" : "Pausado pelo admin";
   $("#collectorState").textContent = stateLabel;
   $("#navCollectorState").textContent = blocked ? "bloqueado" : running ? "executando" : enabled ? "ligado" : "pausado";
   $("#collectorLight").className = `collector-light ${blocked ? "blocked" : running ? "running" : enabled ? "enabled" : "stopped"}`;
   $("#collectorControlNote").textContent = blocked
-    ? `Parada automática em ${fmtMoment(data.control.last_block_at)}. Retome somente após revisar as respostas recentes.`
-    : `Próxima execução: ${fmtMoment(data.next_run_at)} · alvo ${(data.runtime.target_date || "D-1")} · cobertura nacional.`;
+    ? `Worker ${backendLabel} parou em ${fmtMoment(data.control.last_block_at)}. Próxima janela respeita o cooldown e retoma o checkpoint.`
+    : `Worker ${backendLabel} · próxima execução: ${fmtMoment(data.next_run_at)} · alvo ${(data.runtime.target_date || data.runtime.start_date || "D-1")} · cobertura nacional.`;
   $("#enableCollector").textContent = blocked ? "Reconhecer e retomar" : "Ligar / retomar";
-  $("#enableCollector").disabled = strategyReview || (enabled && !blocked);
-  $("#pauseCollector").disabled = !enabled;
-  $("#runCollectorNow").disabled = running || !enabled || blocked;
+  $("#enableCollector").disabled = !manualActions || strategyReview || (enabled && !blocked);
+  $("#pauseCollector").disabled = !manualActions || !enabled;
+  $("#runCollectorNow").disabled = !manualActions || running || !enabled || blocked;
   const minDelayInput = $("#collectorMinDelay");
   const maxDelayInput = $("#collectorMaxDelay");
   if (document.activeElement !== minDelayInput) minDelayInput.value = data.policy.delay_min_seconds;
   if (document.activeElement !== maxDelayInput) maxDelayInput.value = data.policy.delay_max_seconds;
-  $("#saveCollectorPolicy").disabled = running;
-  $("#collectorPolicyNote").textContent = `Distribuição uniforme U(${data.policy.delay_min_seconds}, ${data.policy.delay_max_seconds}) segundos · página de 10 · teto anônimo de ${fmt(data.policy.anonymous_window_limit)} documentos por partição.`;
+  $("#saveCollectorPolicy").disabled = !manualActions || running;
+  $("#collectorPolicyNote").textContent = `Worker ${backendLabel} · distribuição uniforme U(${data.policy.delay_min_seconds}, ${data.policy.delay_max_seconds}) segundos · página de 10 · teto anônimo de ${fmt(data.policy.anonymous_window_limit)} documentos por partição.`;
   renderCards($("#collectorCards"), [
     { label: "Requisições", value: fmt(data.summary.requests), note: "ciclo atual" },
     { label: "Documentos", value: fmt(data.summary.documents), note: "D-1 coletado" },
@@ -1652,6 +1655,7 @@ function renderCollector(data) {
   $("#collectorPolicy").innerHTML = definitionRows([
     ["Janela", data.policy.mode],
     ["Horário", data.policy.schedule],
+    ["Execução", backendLabel],
     ["Página", `${data.policy.page_size} resultados`],
     ["Intervalo", `${data.policy.delay_min_seconds}–${data.policy.delay_max_seconds}s · uniforme (média ${data.policy.delay_average_seconds}s)`],
     ["Limite", String(data.policy.request_budget)],

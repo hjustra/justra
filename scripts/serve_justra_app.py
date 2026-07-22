@@ -23,7 +23,7 @@ import zipfile
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from collections import Counter
 from dataclasses import asdict, dataclass, field
-from datetime import date, datetime, timedelta
+from datetime import date, datetime, timedelta, timezone
 from html import unescape
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -52,6 +52,8 @@ CASES_PATH = APP_DATA_DIR / "cases.json"
 CASE_FILES_DIR = APP_DATA_DIR / "case_files"
 FALCAO_CONTROL_PATH = APP_DATA_DIR / "falcao_control.json"
 FALCAO_RUNTIME_PATH = APP_DATA_DIR / "falcao_runtime.json"
+FALCAO_HOSTINGER_CONTROL_PATH = APP_DATA_DIR / "falcao_hostinger_control.json"
+FALCAO_REMOTE_WORKER_PATH = APP_DATA_DIR / "falcao_remote_worker.json"
 DJEN_CONTROL_PATH = APP_DATA_DIR / "djen_control.json"
 DJEN_RUNTIME_PATH = APP_DATA_DIR / "djen_runtime.json"
 DEADLINE_WATCH_PATH = APP_DATA_DIR / "deadline_watches.json"
@@ -1126,6 +1128,30 @@ def now_iso() -> str:
     return datetime.now().isoformat(timespec="seconds")
 
 
+def iso_timestamp(value: Any) -> float:
+    raw = str(value or "").strip()
+    if not raw:
+        return 0.0
+    if raw.endswith("Z"):
+        raw = raw[:-1] + "+00:00"
+    try:
+        parsed = datetime.fromisoformat(raw)
+    except ValueError:
+        return 0.0
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return parsed.timestamp()
+
+
+def path_mtime(path: Path | None) -> float:
+    if path is None:
+        return 0.0
+    try:
+        return path.stat().st_mtime
+    except OSError:
+        return 0.0
+
+
 def djen_target_date_today() -> str:
     return datetime.now(APP_TZ).date().isoformat()
 
@@ -1141,12 +1167,16 @@ def parse_hhmm(value: Any, fallback: str = "12:00") -> tuple[int, int]:
 
 
 def next_local_run_at(schedule: Any, fallback: str = "12:00") -> str:
-    hour, minute = parse_hhmm(schedule, fallback=fallback)
     now = datetime.now(APP_TZ)
-    next_run = now.replace(hour=hour, minute=minute, second=0, microsecond=0)
-    if next_run <= now:
-        next_run += timedelta(days=1)
-    return next_run.isoformat(timespec="seconds")
+    raw_values = [item.strip() for item in str(schedule or fallback).split(",") if item.strip()]
+    candidates: list[datetime] = []
+    for raw in raw_values or [fallback]:
+        hour, minute = parse_hhmm(raw, fallback=fallback)
+        candidate = now.replace(hour=hour, minute=minute, second=0, microsecond=0)
+        if candidate <= now:
+            candidate += timedelta(days=1)
+        candidates.append(candidate)
+    return min(candidates).isoformat(timespec="seconds")
 
 
 def ensure_config() -> dict[str, Any]:
@@ -8198,8 +8228,28 @@ class JustraApp:
         }
 
     def falcao_dashboard(self) -> dict[str, Any]:
-        control = falcao_control()
-        runtime = load_json_file(FALCAO_RUNTIME_PATH, {})
+        local_control = falcao_control()
+        hostinger_control = load_json_file(FALCAO_HOSTINGER_CONTROL_PATH, {})
+        control = dict(local_control)
+        execution_backend = "azure-local"
+        if hostinger_control:
+            control.update(hostinger_control)
+            execution_backend = "hostinger"
+
+        local_runtime = load_json_file(FALCAO_RUNTIME_PATH, {})
+        remote_runtime = load_json_file(FALCAO_REMOTE_WORKER_PATH, {})
+        runtime = dict(local_runtime)
+        if remote_runtime and (
+            execution_backend == "hostinger"
+            or iso_timestamp(remote_runtime.get("finished_at") or remote_runtime.get("updated_at") or remote_runtime.get("started_at"))
+            >= iso_timestamp(local_runtime.get("updated_at") or local_runtime.get("finished_at") or local_runtime.get("started_at"))
+        ):
+            runtime = dict(remote_runtime)
+            runtime["source"] = "hostinger"
+            execution_backend = "hostinger"
+        else:
+            runtime["source"] = "azure-local"
+
         raw_root = DATA_ROOT / "raw" / "falcao"
         raw_root.mkdir(parents=True, exist_ok=True)
         run_dirs = sorted(
@@ -8217,7 +8267,9 @@ class JustraApp:
         if runtime.get("output_dir"):
             candidate = Path(str(runtime["output_dir"]))
             if candidate.exists():
-                latest_dir = candidate
+                runtime_state = str(runtime.get("state") or "")
+                if runtime_state in {"collecting", "syncing", "running"} or path_mtime(candidate) >= path_mtime(latest_dir):
+                    latest_dir = candidate
         status = load_json_file(latest_dir / "status.json", {}) if latest_dir else {}
         scheduler_status = load_json_file(latest_dir / "scheduler_status.json", {}) if latest_dir else {}
         requests_path = latest_dir / "requests.jsonl" if latest_dir else None
@@ -8340,9 +8392,23 @@ class JustraApp:
                     "retry_after": row.get("retry_after"),
                 }
             )
+        try:
+            block_free_minutes = int(control.get("block_free_minutes") or FALCAO_BLOCK_FREE_MINUTES)
+        except (TypeError, ValueError):
+            block_free_minutes = FALCAO_BLOCK_FREE_MINUTES
+        request_budget = control.get("request_budget")
+        if request_budget in {None, "", 0, "0"}:
+            request_budget = "até concluir D-1" if execution_backend == "azure-local" else "não informado"
         return {
             "control": control,
             "runtime": runtime,
+            "local_control": local_control,
+            "local_runtime": local_runtime,
+            "remote_control": hostinger_control,
+            "remote_runtime": remote_runtime,
+            "execution_backend": execution_backend,
+            "execution_backend_label": "Hostinger" if execution_backend == "hostinger" else "Azure local",
+            "manual_actions_enabled": execution_backend != "hostinger",
             "status": status,
             "scheduler_status": scheduler_status,
             "policy": {
@@ -8356,12 +8422,12 @@ class JustraApp:
                     / 2_000
                 ),
                 "distribution": "uniforme",
-                "request_budget": "até concluir D-1",
+                "request_budget": str(request_budget),
                 "stop_on_block": True,
                 "block_statuses": [403, 429],
                 "non_block_retries": 2,
                 "recoverable_statuses": [400, 408, "5xx"],
-                "block_cooldown_hours": FALCAO_BLOCK_FREE_MINUTES // 60,
+                "block_cooldown_hours": block_free_minutes // 60,
                 "anonymous_window_limit": 200,
                 "collections": FALCAO_COLLECTIONS,
             },
@@ -8402,6 +8468,8 @@ class JustraApp:
         }
 
     def set_falcao_enabled(self, enabled: bool, acknowledge_block: bool = False) -> dict[str, Any]:
+        if load_json_file(FALCAO_HOSTINGER_CONTROL_PATH, {}) or load_json_file(FALCAO_REMOTE_WORKER_PATH, {}):
+            raise ValueError("a coleta Falcão roda na Hostinger; controle operacional pelo timer da VPS")
         current = falcao_control()
         if enabled and current.get("strategy_review_required"):
             raise ValueError("dois bloqueios HTTP 429 exigem revisão da estratégia antes de nova retomada")
@@ -8415,6 +8483,8 @@ class JustraApp:
         return {"ok": True, "control": control}
 
     def set_falcao_policy(self, min_delay_seconds: int, max_delay_seconds: int) -> dict[str, Any]:
+        if load_json_file(FALCAO_HOSTINGER_CONTROL_PATH, {}) or load_json_file(FALCAO_REMOTE_WORKER_PATH, {}):
+            raise ValueError("a coleta Falcão roda na Hostinger; ajuste a política em /etc/justra/falcao-worker.env")
         lower, upper = _validate_falcao_delay_bounds(
             int(min_delay_seconds) * 1_000,
             int(max_delay_seconds) * 1_000,
@@ -8426,6 +8496,8 @@ class JustraApp:
         return {"ok": True, "control": control}
 
     def run_falcao_now(self) -> dict[str, Any]:
+        if load_json_file(FALCAO_HOSTINGER_CONTROL_PATH, {}) or load_json_file(FALCAO_REMOTE_WORKER_PATH, {}):
+            raise ValueError("a coleta Falcão roda na Hostinger; use o systemd/timer da VPS")
         control = falcao_control()
         if not control.get("enabled") or control.get("blocked"):
             raise ValueError("ative a coleta e reconheça eventual bloqueio antes de executar")
@@ -8442,6 +8514,8 @@ class JustraApp:
         return {"ok": True, "state": "starting", "target_date": (date.today() - timedelta(days=1)).isoformat()}
 
     def run_falcao_backfill(self, start_date: str, end_date: str) -> dict[str, Any]:
+        if load_json_file(FALCAO_HOSTINGER_CONTROL_PATH, {}) or load_json_file(FALCAO_REMOTE_WORKER_PATH, {}):
+            raise ValueError("a coleta Falcão roda na Hostinger; use o worker remoto para backfill")
         try:
             start = date.fromisoformat(start_date)
             end = date.fromisoformat(end_date)

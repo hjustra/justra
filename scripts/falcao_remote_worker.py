@@ -76,6 +76,24 @@ def ensure_control(path: Path) -> dict[str, object]:
     return merged
 
 
+def update_control_policy(path: Path, args: argparse.Namespace) -> dict[str, object]:
+    current = ensure_control(path)
+    updates: dict[str, object] = {
+        "min_delay_ms": args.min_delay_ms,
+        "max_delay_ms": args.max_delay_ms,
+        "request_budget": args.request_budget,
+        "block_free_minutes": args.minimum_block_free_minutes,
+        "collections": args.collections.split(","),
+    }
+    schedule = os.getenv("FALCAO_SCHEDULE", "").strip()
+    if schedule:
+        updates["schedule"] = schedule
+    merged = {**current, **updates, "updated_at": now_iso()}
+    if merged != current:
+        atomic_json(path, merged)
+    return merged
+
+
 def run(command: list[str], *, env: dict[str, str] | None = None, timeout: int | None = None) -> subprocess.CompletedProcess[str]:
     return subprocess.run(
         command,
@@ -332,10 +350,64 @@ def sync_and_import(args: argparse.Namespace, output_dir: Path) -> dict[str, obj
     return payload
 
 
+def sync_worker_state(args: argparse.Namespace, status_path: Path, control_path: Path) -> dict[str, object]:
+    if args.skip_sync:
+        return {"ok": False, "skipped": True, "reason": "sync desabilitado"}
+    if not status_path.exists():
+        return {"ok": False, "skipped": True, "reason": "worker status ausente"}
+
+    remote_tmp = f"/tmp/falcao_worker_state_{os.getpid()}"
+    mkdir = run([*ssh_base(args), f"rm -rf {shlex.quote(remote_tmp)} && mkdir -p {shlex.quote(remote_tmp)}"], timeout=60)
+    if mkdir.returncode != 0:
+        raise RuntimeError(f"Azure worker state tmp failed: {mkdir.stderr[-2000:]}")
+
+    sources = [str(status_path)]
+    if control_path.exists():
+        sources.append(str(control_path))
+    copied = run([*scp_base(args), *sources, f"{args.azure_target}:{remote_tmp}/"], timeout=120)
+    if copied.returncode != 0:
+        raise RuntimeError(f"Azure worker state scp failed: {copied.stderr[-2000:]}")
+
+    app_dir = f"{args.azure_data_dir.rstrip('/')}/app"
+    remote_lines = [
+        "set -e",
+        f"sudo mkdir -p {shlex.quote(app_dir)}",
+        f"sudo cp {shlex.quote(remote_tmp + '/' + status_path.name)} {shlex.quote(app_dir + '/falcao_remote_worker.json')}",
+    ]
+    if control_path.exists():
+        remote_lines.append(
+            f"sudo cp {shlex.quote(remote_tmp + '/' + control_path.name)} {shlex.quote(app_dir + '/falcao_hostinger_control.json')}"
+        )
+    installed_files = [app_dir + "/falcao_remote_worker.json"]
+    if control_path.exists():
+        installed_files.append(app_dir + "/falcao_hostinger_control.json")
+    quoted_installed = " ".join(shlex.quote(item) for item in installed_files)
+    remote_lines.extend(
+        [
+            f"sudo chown justra:justra {quoted_installed}",
+            f"sudo chmod 0600 {quoted_installed}",
+            f"rm -rf {shlex.quote(remote_tmp)}",
+        ]
+    )
+    remote = run([*ssh_base(args), "\n".join(remote_lines)], timeout=120)
+    if remote.returncode != 0:
+        raise RuntimeError(f"Azure worker state install failed: {remote.stderr[-2000:]}")
+    return {"ok": True, "azure_app_dir": app_dir}
+
+
+def sync_worker_state_best_effort(args: argparse.Namespace, status_path: Path, control_path: Path) -> dict[str, object]:
+    try:
+        return sync_worker_state(args, status_path, control_path)
+    except Exception as exc:  # noqa: BLE001
+        return {"ok": False, "error": str(exc)}
+
+
 def main() -> int:
     args = parse_args()
     status_path = Path(args.worker_status)
+    control_path = Path(args.control_path)
     LOG_ROOT.mkdir(parents=True, exist_ok=True)
+    update_control_policy(control_path, args)
     atomic_json(
         status_path,
         {
@@ -347,6 +419,7 @@ def main() -> int:
             "collections": args.collections.split(","),
         },
     )
+    sync_worker_state_best_effort(args, status_path, control_path)
     try:
         env = build_env(args)
         returncode, output_dir, collector_status = collect(args, env)
@@ -377,6 +450,7 @@ def main() -> int:
             "sync": sync_result,
         }
         atomic_json(status_path, final)
+        sync_worker_state_best_effort(args, status_path, control_path)
         print(json.dumps(final, ensure_ascii=False, indent=2))
         return 0 if returncode in {0, 2} else returncode
     except Exception as exc:  # noqa: BLE001
@@ -389,6 +463,7 @@ def main() -> int:
                 "error": str(exc),
             },
         )
+        sync_worker_state_best_effort(args, status_path, control_path)
         print(str(exc), file=sys.stderr)
         return 1
 
