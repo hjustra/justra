@@ -809,9 +809,9 @@ TABLE_DOCUMENTATION: dict[str, list[dict[str, Any]]] = {
         },
         {
             "table": "full_text_documents",
-            "purpose": "Documentos judiciais com texto integral importado; atualmente concentra os acórdãos coletados do Falcão.",
+            "purpose": "Documentos judiciais com texto integral importado; reúne Falcão, PJe e futuras fontes autorizadas.",
             "grain": "Uma linha por documento integral deduplicado.",
-            "source": "Falcão/Jurisprudência Nacional e futuras fontes autorizadas.",
+            "source": "Falcão/Jurisprudência Nacional, PJe capturado pelo usuário e futuras fontes autorizadas.",
             "logical_key": "source_provider + document_id; text_sha256 auxilia a deduplicação por conteúdo",
             "relationships": "process_number liga o documento ao cadastro processual quando o processo também existe no DataJud.",
             "fields": [
@@ -9458,9 +9458,12 @@ class JustraApp:
         )
         judges = self.execute(
             """
-            SELECT judge_name, COUNT(DISTINCT process_number) AS total
-            FROM full_text_documents
-            WHERE judge_name IS NOT NULL AND judge_name <> ''
+            SELECT
+                COALESCE(NULLIF(f.judge_name, ''), NULLIF(f.reporting_judge, '')) AS judge_name,
+                COUNT(DISTINCT f.process_number) AS total
+            FROM full_text_documents f
+            JOIN processes p ON p.process_number = f.process_number
+            WHERE COALESCE(NULLIF(f.judge_name, ''), NULLIF(f.reporting_judge, '')) IS NOT NULL
             GROUP BY 1
             ORDER BY total DESC, judge_name
             LIMIT 300
@@ -9583,11 +9586,15 @@ class JustraApp:
             p_params,
         )
         judge_count = self.one(
-            """
-            SELECT COUNT(DISTINCT COALESCE(NULLIF(judge_name, ''), NULLIF(reporting_judge, '')))
-            FROM full_text_documents
-            WHERE COALESCE(NULLIF(judge_name, ''), NULLIF(reporting_judge, '')) IS NOT NULL
-            """
+            f"""
+            SELECT COUNT(DISTINCT COALESCE(NULLIF(f.judge_name, ''), NULLIF(f.reporting_judge, '')))
+            FROM full_text_documents f
+            JOIN processes p ON p.process_number = f.process_number
+            {p_joins}
+            WHERE {p_where}
+              AND COALESCE(NULLIF(f.judge_name, ''), NULLIF(f.reporting_judge, '')) IS NOT NULL
+            """,
+            p_params,
         )
         judged_count = self.one(
             f"""
@@ -9785,9 +9792,10 @@ class JustraApp:
             ],
             "pagination": {"limit": limit, "offset": offset, "returned": len(process_rows)},
             "notes": [
+                "Jurimetria processual usa processos DataJud do TRT2; o acervo Falcão nacional aparece no mapa de cobertura e na busca jurídica.",
                 "Processos são filtrados por data de ajuizamento; desfechos são filtrados por data do movimento.",
                 "Favorável ao trabalhador é proxy: procedente ou procedente_parcial.",
-                "Juiz e inteiro teor aparecem quando a tabela full_text_documents for preenchida.",
+                "Inteiro teor e juiz contam apenas documentos casados com processos do recorte filtrado.",
             ],
         }
 
@@ -10808,9 +10816,45 @@ class JustraApp:
             )
             if row[0]
         }
+        falcao_by_type = {
+            row[0] or "sem tipo": row[1]
+            for row in self.execute(
+                """
+                SELECT COALESCE(NULLIF(document_type, ''), 'sem tipo') AS document_type, COUNT(*) AS documents
+                FROM full_text_documents
+                WHERE source_provider = 'falcao'
+                GROUP BY 1
+                ORDER BY documents DESC, document_type
+                """
+            )
+        }
         falcao_total = sum(falcao_by_court.values())
+        falcao_type_labels = {
+            "acordao": "acórdãos",
+            "sentenca": "sentenças",
+            "sentencas": "sentenças",
+            "decisao_monocratica": "decisões monocráticas",
+            "decisoesmonocraticas": "decisões monocráticas",
+            "recursorevista": "recursos de revista",
+            "precedentes": "precedentes",
+        }
+        falcao_type_summary = ", ".join(
+            f"{count} {falcao_type_labels.get(kind, kind.replace('_', ' '))}"
+            for kind, count in falcao_by_type.items()
+        ) or "sem documentos"
+        falcao_court_summary = ", ".join(sorted(falcao_by_court)) if falcao_by_court else "nenhum tribunal"
         counts["full_text_by_court"] = falcao_by_court
+        counts["falcao_by_type"] = falcao_by_type
         counts["falcao_full_text"] = falcao_total
+        active_djen = _active_djen_manifests()
+        djen_publications = sum(int(manifest.get("total_publications") or 0) for _, manifest, _ in active_djen)
+        djen_latest_path = str(active_djen[0][0]) if active_djen else ""
+        djen_latest_date = active_djen[0][2].isoformat() if active_djen else ""
+        if not djen_publications:
+            poll_path, poll_manifest = _djen_pdf_poll_manifest_for_date(djen_target_date_today())
+            djen_publications = int(poll_manifest.get("events_imported") or 0)
+            djen_latest_path = str(poll_path or "")
+            djen_latest_date = str(poll_manifest.get("run_date") or djen_target_date_today())
         basis_index = DATA_ROOT / "raw" / "json" / "document_index.json"
         basis_count = 0
         if basis_index.exists():
@@ -10843,20 +10887,20 @@ class JustraApp:
             {"court": "TRT2", "layer": "Inteiro teor - sentenças 1º grau", "status": "aberto", "count": 0, "storage": "processos.full_text_documents (document_type = 'sentenca')", "quality": "necessário para juiz/prova/fundamento", "next_step": "obter fonte autorizada de sentenças"},
             {
                 "court": "TRT2",
-                "layer": "Falcão - acórdãos com inteiro teor",
+                "layer": "Falcão - inteiro teor",
                 "status": "parcial" if falcao_by_court.get("TRT2") else "aberto",
                 "count": falcao_by_court.get("TRT2", 0),
                 "storage": "processos.full_text_documents (source_provider = 'falcao', court_unit LIKE 'TRT2%')",
-                "quality": "texto integral, relatoria, turma, data e link oficial",
-                "next_step": "retomar coleta incremental após o cooldown",
+                "quality": "documentos com texto integral, relatoria/turma, data e link oficial quando disponíveis",
+                "next_step": "continuar coleta incremental pelo worker Hostinger após cooldown",
             },
             {
                 "court": "JT nacional",
-                "layer": "Falcão - acórdãos com inteiro teor",
+                "layer": "Falcão - inteiro teor",
                 "status": "parcial" if falcao_total else "aberto",
                 "count": falcao_total,
                 "storage": "processos.full_text_documents (source_provider = 'falcao')",
-                "quality": "acórdãos pesquisáveis de TRT1 a TRT9 e TST nesta coleta",
+                "quality": f"{falcao_type_summary}; tribunais com cobertura: {falcao_court_summary}",
                 "next_step": "completar datas, tribunais e demais tipos documentais",
             },
             {
@@ -10886,7 +10930,15 @@ class JustraApp:
                 "quality": "texto público oficial fatiado por artigo com link âncora",
                 "next_step": "relacionar artigos com súmulas/OJs/acórdãos e temas",
             },
-            {"court": "Diários oficiais", "layer": "Publicações e andamentos", "status": "planejado", "count": 0, "storage": "ainda sem tabela", "quality": "complementa descoberta e datas", "next_step": "mapear fonte, termos e limites"},
+            {
+                "court": "Diários oficiais",
+                "layer": "DJEN/DEJT - publicações processuais",
+                "status": "em coleta" if djen_publications else "planejado",
+                "count": djen_publications,
+                "storage": djen_latest_path or "processed/djen; processed/dejt_pdf_poll",
+                "quality": f"publicações normalizadas em arquivo; data mais recente: {djen_latest_date or 'n/d'}",
+                "next_step": "consolidar índice/tabela pesquisável e ligar ao mapa processual por CNJ",
+            },
         ]
         trts = []
         for index in range(1, 25):
@@ -10895,7 +10947,7 @@ class JustraApp:
             trts.append(
                 {
                     "court": court,
-                    "metadata": "em coleta" if court == "TRT2" else ("parcial" if falcao_count else "não iniciado"),
+                    "metadata": "em coleta" if court == "TRT2" else "não iniciado",
                     "jurisprudence": "parcial" if falcao_count else ("piloto" if court == "TRT2" else "não iniciado"),
                     "doctrine": "em coleta" if court == "TRT2" and trt2_basis_status else ("piloto" if court == "TRT2" else "não iniciado"),
                     "full_text": "parcial" if falcao_count else ("aberto" if court == "TRT2" else "não iniciado"),
@@ -10906,7 +10958,7 @@ class JustraApp:
         trts.append(
             {
                 "court": "TST",
-                "metadata": "parcial" if tst_falcao_count else "planejado",
+                "metadata": "planejado",
                 "jurisprudence": "parcial" if tst_falcao_count else ("estruturado" if tst_current.get("items") else "piloto"),
                 "doctrine": "planejado",
                 "full_text": "parcial" if tst_falcao_count else ("em coleta" if tst_acordaos.get("items") else "planejado"),
@@ -10923,9 +10975,9 @@ class JustraApp:
             "falcao_status": falcao_status,
             "open_gaps": [
                 "Juiz de 1º grau depende de inteiro teor ou fonte complementar.",
-                "O inteiro teor do Falcão cobre somente os 4.585 acórdãos já coletados; não representa toda a Justiça do Trabalho.",
+                f"O inteiro teor do Falcão cobre {falcao_total} documentos coletados em lote parcial; não representa toda a Justiça do Trabalho.",
                 "Jurisprudência/doutrina precisam de vigência, substituição e citações cruzadas.",
-                "Diários oficiais podem melhorar descoberta, mas não substituem inteiro teor.",
+                "DJEN/DEJT melhora descoberta e datas, mas não substitui inteiro teor nem metadados DataJud.",
             ],
         }
 

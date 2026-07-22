@@ -875,7 +875,7 @@ async function loadJurimetrics() {
   const data = await api(`/api/jurimetrics?${jurimetricsQuery()}`);
   state.lastJurimetrics = data;
   renderJurimetrics(data);
-  $("#dbStatus").textContent = "DuckDB local";
+  $("#dbStatus").textContent = "DuckDB";
   $(".dot").classList.add("ok");
 }
 
@@ -1065,13 +1065,13 @@ function renderCards(container, cards) {
 function renderJurimetrics(data) {
   const summary = data.summary;
   renderCards($("#summaryCards"), [
-    { label: "Processos", value: fmt(summary.processes), note: data.filters.period.label },
+    { label: "Processos", value: fmt(summary.processes), note: `${data.filters.period.label} · DataJud TRT2` },
     { label: "Classificados", value: fmt(summary.classified_processes), note: "com pedido/assunto" },
-    { label: "Julgamento/decisão", value: fmt(summary.judged_processes), note: "por movimento" },
+    { label: "Julgamento/decisão", value: fmt(summary.judged_processes), note: "movimentos DataJud" },
     { label: "Desfecho final", value: fmt(summary.final_outcome_processes), note: "heurística" },
-    { label: "Favoráveis", value: fmt(summary.favorable_to_worker_proxy), note: "procedente + parcial" },
-    { label: "Inteiro teor", value: fmt(summary.full_text_documents), note: "importados" },
-    { label: "Juízes", value: fmt(summary.judges_identified), note: "dependem do inteiro teor" },
+    { label: "Favoráveis", value: fmt(summary.favorable_to_worker_proxy), note: "proxy: procedente + parcial" },
+    { label: "Processos com teor", value: fmt(summary.full_text_documents), note: "casados no recorte" },
+    { label: "Juízes/relatores", value: fmt(summary.judges_identified), note: "casados no recorte" },
   ]);
   renderBars($("#outcomeBars"), data.outcomes, "outcome");
   renderBars($("#claimBars"), data.top_claims, "claim_type");
@@ -1379,11 +1379,11 @@ async function saveBotControls() {
 async function loadCoverageMap() {
   const data = await api("/api/admin/coverage-map");
   renderCards($("#coverageCards"), [
-    { label: "Processos TRT2", value: fmt(data.summary.processes), note: "DataJud" },
-    { label: "Unidades TRT2", value: fmt(data.summary.court_units), note: "varas/órgãos" },
+    { label: "Processos DataJud", value: fmt(data.summary.processes), note: "TRT2" },
+    { label: "Unidades DataJud", value: fmt(data.summary.court_units), note: "TRT2" },
     { label: "Pedidos", value: fmt(data.summary.claims), note: "classificações" },
     { label: "Eventos decisórios", value: fmt(data.summary.decision_events), note: "movimentos" },
-    { label: "Inteiro teor", value: fmt(data.summary.full_text), note: "documentos" },
+    { label: "Inteiro teor JT", value: fmt(data.summary.full_text), note: "Falcão + PJe" },
     { label: "Atualizado", value: data.updated_at.slice(11, 16), note: data.updated_at.slice(0, 10) },
   ]);
   $("#sourceLayerTable").innerHTML = data.source_layers
