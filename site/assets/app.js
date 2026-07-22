@@ -1738,6 +1738,8 @@ function pjeJobStatusLabel(status) {
     operator_requested: "Na fila",
     operator_running: "Executando",
     retry_wait: "Aguardando retry",
+    waiting_user_login: "Aguardando login",
+    waiting_browser_extension: "Aguardando extensão",
     succeeded: "Concluído",
     manual_required: "Manual necessário",
     blocked_by_origin: "Origem bloqueada",
@@ -2860,9 +2862,12 @@ function renderProcessCenterError(err) {
 function pjeAccountStatusLabel(status) {
   return {
     login_required: "Reconectar PJe",
+    login_link_ready: "Abrir login PJe",
     login_queued: "Login na fila",
     sync_queued: "Sync na fila",
     ready: "Sessão ativa",
+    ready_browser_extension: "Conectado via extensão",
+    sync_waiting_browser_extension: "Sync aguardando extensão",
     manual_bridge_required: "Ponte interativa pendente",
     error: "Erro",
   }[status] || status || "Sem sessão";
@@ -2881,6 +2886,10 @@ function renderPjeAccounts(data = state.pjeAccounts || {}) {
         const lastLogin = account.last_login_at ? `Login ${fmtMoment(account.last_login_at)}` : "Sem login";
         const lastSync = account.last_sync_at ? `Sync ${fmtMoment(account.last_sync_at)}` : "Sem sync";
         const error = account.last_error ? `<br><span class="muted">${escapeHtml(short(account.last_error, 120))}</span>` : "";
+        const connectUrl = safeUrl(account.connect_url || "");
+        const openLogin = connectUrl
+          ? `<button type="button" data-pje-account-open-login="${id}">Abrir login</button>`
+          : "";
         return `<article class="pje-account-item">
           <div>
             <strong>${escapeHtml(account.trt || "TRT")} · OAB ${escapeHtml(account.oab || "—")}${account.uf ? `/${escapeHtml(account.uf)}` : ""}</strong>
@@ -2888,6 +2897,7 @@ function renderPjeAccounts(data = state.pjeAccounts || {}) {
           </div>
           <div>
             ${statusBadge(pjeAccountStatusLabel(account.session_status))}
+            ${openLogin}
             <button type="button" data-pje-account-login="${id}">Reconectar</button>
             <button type="button" data-pje-account-sync="${id}">Sincronizar</button>
           </div>
@@ -2921,18 +2931,23 @@ async function createPjeAccount() {
   });
   renderPjeAccounts(data);
   const created = Number(data.created_accounts?.length || trts.length || 0);
-  $("#pjeAccountStatus").textContent = `${fmt(created)} conexão(ões) PJe criada(s). A fila do operador recebeu os jobs de login.`;
+  $("#pjeAccountStatus").textContent = `${fmt(created)} conexão(ões) PJe criada(s). Clique em Abrir login em cada TRT para autenticar no site oficial.`;
 }
 
 async function runPjeAccountAction(accountId, action) {
   const path = action === "sync" ? "/api/pje/accounts/sync" : "/api/pje/accounts/login";
-  $("#pjeAccountStatus").textContent = action === "sync" ? "Sincronização PJe enfileirada..." : "Reconexão PJe enfileirada...";
+  $("#pjeAccountStatus").textContent = action === "sync" ? "Sincronização PJe enfileirada..." : "Gerando novo link oficial de login PJe...";
   const data = await api(path, {
     method: "POST",
     body: JSON.stringify({ account_id: accountId }),
   });
   renderPjeAccounts(data);
-  $("#pjeAccountStatus").textContent = action === "sync" ? "Job de sincronização enviado para a fila." : "Job de login enviado para a fila.";
+  const account = data.account || (data.accounts || []).find((item) => item.id === accountId) || {};
+  const connectUrl = safeUrl(account.connect_url || "");
+  if (action !== "sync" && connectUrl) {
+    window.open(connectUrl, "_blank", "noopener,noreferrer");
+  }
+  $("#pjeAccountStatus").textContent = action === "sync" ? "Job de sincronização enviado para a fila." : "Link de login PJe pronto. Se a aba não abrir, use Abrir login.";
 }
 
 function renderPjeExtensionInstall(config = state.pjeExtension || {}) {
@@ -4610,6 +4625,18 @@ function bindEvents() {
     createPjeAccount().catch((err) => { $("#pjeAccountStatus").textContent = `Erro: ${err.message}`; });
   });
   $("#pjeAccountRows")?.addEventListener("click", (event) => {
+    const openLoginButton = event.target.closest("[data-pje-account-open-login]");
+    if (openLoginButton) {
+      const account = (state.pjeAccounts?.accounts || []).find((item) => item.id === openLoginButton.dataset.pjeAccountOpenLogin) || {};
+      const connectUrl = safeUrl(account.connect_url || "");
+      if (!connectUrl) {
+        $("#pjeAccountStatus").textContent = "Gere um novo link com Reconectar.";
+        return;
+      }
+      window.open(connectUrl, "_blank", "noopener,noreferrer");
+      $("#pjeAccountStatus").textContent = "Login PJe aberto no site oficial. Depois de entrar, clique em Concluir conexão na extensão.";
+      return;
+    }
     const loginButton = event.target.closest("[data-pje-account-login]");
     if (loginButton) {
       loginButton.disabled = true;

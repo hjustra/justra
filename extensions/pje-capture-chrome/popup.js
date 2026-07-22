@@ -10,7 +10,7 @@ async function activeTab() {
 }
 
 function isPjeTab(tab) {
-  return Boolean(tab && tab.url && tab.url.startsWith("https://pje.trt2.jus.br/consultaprocessual/"));
+  return Boolean(tab && tab.url && /^https:\/\/pje\.trt\d{1,2}\.jus\.br\//i.test(tab.url));
 }
 
 async function ensureContentScript(tab) {
@@ -26,7 +26,7 @@ async function ensureContentScript(tab) {
 async function sendToContent(type) {
   const tab = await activeTab();
   if (!isPjeTab(tab)) {
-    setStatus("Abra uma consulta processual do PJe TRT2 antes de usar.");
+    setStatus("Abra uma página do PJe de um TRT antes de usar.");
     return null;
   }
   await ensureContentScript(tab);
@@ -57,7 +57,7 @@ document.getElementById("sendAllDocuments").addEventListener("click", async () =
     setStatus("Capturando documentos para enviar...");
     const result = await sendToContent("JUSTRA_SEND_ALL_DOCUMENTS_NOW");
     if (result) {
-      setStatus(`Enviado. ${resultLabel(result)}`);
+      setStatus(`Enviado para ${result.import_environment_label || "Justra"}. ${resultLabel(result)}`);
     }
   } catch (error) {
     setStatus(`Não consegui enviar: ${error.message}`);

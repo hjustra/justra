@@ -81,6 +81,7 @@ PJE_JOB_MAX_ATTEMPTS = 3
 PJE_JOB_STALE_LOCK_MINUTES = 20
 PJE_USER_WAIT_SECONDS = 60
 PJE_OPERATOR_RETRY_MINUTES = 10
+PJE_SESSION_CONNECT_TOKEN_MINUTES = 30
 PJE_JOB_TYPE_PUBLIC_COLLECT = "pje_collect_public_process"
 PJE_JOB_TYPE_LOGIN_SESSION = "pje_login_session"
 PJE_JOB_TYPE_SYNC_ACCOUNT = "pje_sync_account_processes"
@@ -3301,6 +3302,24 @@ class JustraApp:
         return f"https://pje.trt{number}.jus.br/primeirograu"
 
     @staticmethod
+    def _pje_account_expected_host(trt: str) -> str:
+        digits = only_digits(trt)
+        number = str(int(digits or "2") or 2)
+        return f"pje.trt{number}.jus.br"
+
+    @staticmethod
+    def _pje_account_connect_url(account: dict[str, Any], token: str, base_url: str = "") -> str:
+        login_url = str(account.get("login_url") or JustraApp._pje_account_login_url(str(account.get("trt") or "TRT2")))
+        params = urlencode(
+            {
+                "justra_pje_connect": str(token or ""),
+                "justra_origin": str(base_url or "").rstrip("/"),
+                "justra_account": str(account.get("id") or ""),
+            }
+        )
+        return f"{login_url}#{params}"
+
+    @staticmethod
     def _pje_account_job_id(account_id: str, job_type: str, process_number: str = "") -> str:
         safe_account_id = re.sub(r"[^A-Za-z0-9_.:-]+", "-", str(account_id or "")).strip("-")
         if not safe_account_id:
@@ -3403,6 +3422,7 @@ class JustraApp:
     @staticmethod
     def _pje_account_public(account: dict[str, Any]) -> dict[str, Any]:
         public = copy.deepcopy(account)
+        public.pop("connect_token", None)
         public.pop("credential", None)
         public.pop("credentials", None)
         public.pop("password", None)
@@ -3459,7 +3479,46 @@ class JustraApp:
             self._save_pje_accounts()
         return copy.deepcopy(account)
 
-    def upsert_pje_account(self, user: dict[str, Any], payload: dict[str, Any]) -> dict[str, Any]:
+    def _prepare_pje_account_login_link(
+        self,
+        account: dict[str, Any],
+        *,
+        base_url: str = "",
+        reason: str = "pje_account_login",
+        priority: int = 85,
+    ) -> tuple[dict[str, Any], dict[str, Any]]:
+        account_id = str(account.get("id") or "")
+        if not account_id:
+            raise ValueError("conta PJe inválida")
+        token = secrets.token_urlsafe(24)
+        expires_at = (datetime.now() + timedelta(minutes=PJE_SESSION_CONNECT_TOKEN_MINUTES)).isoformat(timespec="seconds")
+        connect_url = self._pje_account_connect_url(account, token, base_url)
+        with self.pje_accounts_lock:
+            stored = self.pje_accounts.setdefault("accounts", {}).get(account_id)
+            if not isinstance(stored, dict):
+                raise ValueError("conta PJe não encontrada")
+            stored["connect_token"] = token
+            stored["connect_token_expires_at"] = expires_at
+            stored["connect_url"] = connect_url
+            stored["session_status"] = "login_link_ready"
+            stored["session_transport"] = "browser_extension"
+            stored["last_error"] = ""
+            stored["updated_at"] = now_iso()
+            account = copy.deepcopy(stored)
+            self._save_pje_accounts()
+        job = self.enqueue_pje_account_job(
+            account,
+            PJE_JOB_TYPE_LOGIN_SESSION,
+            reason=reason,
+            priority=priority,
+            force=True,
+            initial_status="waiting_user_login",
+        )
+        self._set_pje_account_job_state(account_id, job, "login_link_ready")
+        self._append_pje_account_event(account_id, "login_link_ready", {"job_id": job.get("id"), "expires_at": expires_at})
+        return self._pje_account_public(account), job
+
+    def upsert_pje_account(self, user: dict[str, Any], payload: dict[str, Any], base_url: str = "") -> dict[str, Any]:
         if not isinstance(payload, dict):
             raise ValueError("payload inválido")
         self._reject_pje_credential_payload(payload)
@@ -3474,9 +3533,8 @@ class JustraApp:
             account = self._upsert_pje_account_record(user_id, office_id, trt, oab, uf)
             account_id = str(account.get("id") or "")
             self._append_pje_account_event(account_id, "upserted", {"user_id": user_id, "trt": trt, "oab": oab, "uf": uf})
-            job = self.enqueue_pje_account_job(account, PJE_JOB_TYPE_LOGIN_SESSION, reason="pje_account_login", priority=85, force=True)
-            self._set_pje_account_job_state(account_id, job, "login_queued")
-            created_accounts.append(self._pje_account_for_user(user, account_id))
+            public_account, job = self._prepare_pje_account_login_link(account, base_url=base_url, reason="pje_account_login", priority=85)
+            created_accounts.append(public_account)
             jobs.append(job)
         return {
             "ok": True,
@@ -3508,6 +3566,7 @@ class JustraApp:
         priority: int = 50,
         process_number: str = "",
         force: bool = False,
+        initial_status: str = "queued",
     ) -> dict[str, Any]:
         if job_type not in PJE_ACCOUNT_JOB_TYPES:
             raise ValueError("tipo de job PJe autenticado inválido")
@@ -3544,7 +3603,7 @@ class JustraApp:
                 "uf": str(account.get("uf") or ""),
                 "session_dir": str(account.get("session_dir") or f"pje_sessions/{account_id}"),
                 "page_url": self._official_pje_url_for_process(compact) if compact else str(account.get("login_url") or ""),
-                "status": "queued" if should_reset else status,
+                "status": str(initial_status or "queued") if should_reset else status,
                 "reason": str(reason or existing.get("reason") or "pje_account")[:80],
                 "priority": max(int(existing.get("priority") or 0), int(priority or 0)),
                 "attempts": 0 if should_reset else int(existing.get("attempts") or 0),
@@ -3566,21 +3625,94 @@ class JustraApp:
         self._append_pje_job_event(job_id, "queued", {"reason": reason, "priority": priority, "account_id": account_id, "job_type": job_type})
         return self._pje_job_public(copy.deepcopy(job))
 
-    def request_pje_account_login(self, user: dict[str, Any], payload: dict[str, Any]) -> dict[str, Any]:
+    def request_pje_account_login(self, user: dict[str, Any], payload: dict[str, Any], base_url: str = "") -> dict[str, Any]:
         account = self._pje_account_for_user(user, str(payload.get("account_id") or ""))
-        job = self.enqueue_pje_account_job(account, PJE_JOB_TYPE_LOGIN_SESSION, reason="pje_account_reconnect", priority=90, force=True)
-        self._set_pje_account_job_state(str(account.get("id") or ""), job, "login_queued")
-        return {"ok": True, "account": self._pje_account_for_user(user, str(account.get("id") or "")), "job": job, **self.list_pje_accounts(user)}
+        public_account, job = self._prepare_pje_account_login_link(account, base_url=base_url, reason="pje_account_reconnect", priority=90)
+        return {"ok": True, "account": public_account, "job": job, **self.list_pje_accounts(user)}
 
     def request_pje_account_sync(self, user: dict[str, Any], payload: dict[str, Any]) -> dict[str, Any]:
         account = self._pje_account_for_user(user, str(payload.get("account_id") or ""))
         account_id = str(account.get("id") or "")
-        ready = str(account.get("session_status") or "") == "ready"
+        ready = str(account.get("session_status") or "") in {"ready", "ready_browser_extension"}
         job_type = PJE_JOB_TYPE_SYNC_ACCOUNT if ready else PJE_JOB_TYPE_LOGIN_SESSION
         reason = "pje_account_sync" if ready else "pje_account_login_before_sync"
-        job = self.enqueue_pje_account_job(account, job_type, reason=reason, priority=80, force=True)
-        self._set_pje_account_job_state(account_id, job, "sync_queued" if ready else "login_queued")
+        browser_extension_session = str(account.get("session_transport") or "") == "browser_extension"
+        job = self.enqueue_pje_account_job(
+            account,
+            job_type,
+            reason=reason,
+            priority=80,
+            force=True,
+            initial_status="waiting_browser_extension" if ready and browser_extension_session else "queued",
+        )
+        self._set_pje_account_job_state(account_id, job, "sync_waiting_browser_extension" if ready and browser_extension_session else "sync_queued" if ready else "login_queued")
         return {"ok": True, "account": self._pje_account_for_user(user, account_id), "job": job, **self.list_pje_accounts(user)}
+
+    def confirm_pje_extension_session(self, payload: dict[str, Any], client_host: str) -> dict[str, Any]:
+        if not isinstance(payload, dict):
+            raise ValueError("payload inválido")
+        token = str(payload.get("connect_token") or payload.get("token") or "").strip()
+        if not token:
+            raise ValueError("token de conexão PJe ausente")
+        page_url = str(payload.get("page_url") or payload.get("url") or "")[:900]
+        page_host = str(payload.get("host") or "").lower().strip()
+        if page_url and not page_host:
+            try:
+                page_host = urlparse(page_url).hostname or ""
+            except Exception:  # noqa: BLE001
+                page_host = ""
+        matched_account: dict[str, Any] | None = None
+        now_dt = datetime.now()
+        with self.pje_accounts_lock:
+            for account in (self.pje_accounts.get("accounts") or {}).values():
+                if not isinstance(account, dict) or not hmac.compare_digest(str(account.get("connect_token") or ""), token):
+                    continue
+                expires_at = self._parse_iso_datetime(account.get("connect_token_expires_at"))
+                if expires_at and expires_at < now_dt:
+                    raise ValueError("token de conexão PJe expirado")
+                expected_host = self._pje_account_expected_host(str(account.get("trt") or "TRT2"))
+                if page_host and page_host != expected_host:
+                    raise ValueError("login PJe confirmado em TRT diferente da conexão selecionada")
+                account["session_status"] = "ready_browser_extension"
+                account["session_transport"] = "browser_extension"
+                account["last_login_at"] = now_iso()
+                account["last_error"] = ""
+                account["connect_token"] = ""
+                account["connect_token_expires_at"] = ""
+                account["connect_url"] = ""
+                account["current_job_id"] = ""
+                account["current_job_type"] = ""
+                account["updated_at"] = now_iso()
+                matched_account = copy.deepcopy(account)
+                break
+            if matched_account is None:
+                raise ValueError("token de conexão PJe inválido")
+            self.pje_accounts.setdefault("worker", {})["last_extension_confirm_at"] = now_iso()
+            self._save_pje_accounts()
+        account_id = str(matched_account.get("id") or "")
+        login_job_id = self._pje_account_job_id(account_id, PJE_JOB_TYPE_LOGIN_SESSION)
+        with self.pje_jobs_lock:
+            job = self.pje_jobs.setdefault("jobs", {}).get(login_job_id)
+            if isinstance(job, dict):
+                job["status"] = "succeeded"
+                job["last_error"] = ""
+                job["last_capture_at"] = now_iso()
+                job["locked_by"] = ""
+                job["locked_at"] = ""
+                job["updated_at"] = now_iso()
+                self._save_pje_jobs()
+        self._append_pje_account_event(
+            account_id,
+            "browser_extension_confirmed",
+            {
+                "client_host": str(client_host or "")[:80],
+                "page_url": page_url,
+                "page_host": page_host,
+                "extension_version": str(payload.get("extension_version") or "")[:40],
+            },
+        )
+        self._append_pje_job_event(login_job_id, "browser_extension_confirmed", {"account_id": account_id, "page_host": page_host})
+        return {"ok": True, "account": self._pje_account_public(matched_account)}
 
     def _update_pje_account_after_job(self, job: dict[str, Any], ok: bool, error: str, result: dict[str, Any]) -> None:
         account_id = str(job.get("account_id") or "")
@@ -11188,6 +11320,12 @@ def make_handler(app: JustraApp):
                         return
                     self._send_json(app.import_pje_extension_payload(payload, str(self.client_address[0])))
                     return
+                if parsed.path == "/api/pje-extension/session/confirm":
+                    if not self._is_allowed_extension_origin(self.headers.get("Origin", "")):
+                        self._send_json({"error": "origem não permitida para conexão PJe"}, status=403)
+                        return
+                    self._send_json(app.confirm_pje_extension_session(payload, str(self.client_address[0])))
+                    return
                 if parsed.path == "/api/operator/pje/jobs/next":
                     operator = self._require_operator()
                     if not operator:
@@ -11253,10 +11391,10 @@ def make_handler(app: JustraApp):
                     self._send_json({**result, "dashboard": app.updates_dashboard(user, {})})
                     return
                 if parsed.path == "/api/pje/accounts":
-                    self._send_json(app.upsert_pje_account(user, payload))
+                    self._send_json(app.upsert_pje_account(user, payload, self._base_url()))
                     return
                 if parsed.path == "/api/pje/accounts/login":
-                    self._send_json(app.request_pje_account_login(user, payload))
+                    self._send_json(app.request_pje_account_login(user, payload, self._base_url()))
                     return
                 if parsed.path == "/api/pje/accounts/sync":
                     self._send_json(app.request_pje_account_sync(user, payload))

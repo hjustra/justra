@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
   "name": "Justra PJe Capture",
-  "version": "0.4.1",
-  "description": "Captura dados visíveis do PJe TRT2 para importação na Justra.",
+  "version": "0.4.4",
+  "description": "Captura dados visíveis do PJe dos TRTs para importação na Justra.",
   "icons": {
     "128": "icons/justra-128.png"
   },
@@ -12,7 +12,31 @@
     "storage"
   ],
   "host_permissions": [
+    "https://pje.trt1.jus.br/*",
     "https://pje.trt2.jus.br/*",
+    "https://pje.trt3.jus.br/*",
+    "https://pje.trt4.jus.br/*",
+    "https://pje.trt5.jus.br/*",
+    "https://pje.trt6.jus.br/*",
+    "https://pje.trt7.jus.br/*",
+    "https://pje.trt8.jus.br/*",
+    "https://pje.trt9.jus.br/*",
+    "https://pje.trt10.jus.br/*",
+    "https://pje.trt11.jus.br/*",
+    "https://pje.trt12.jus.br/*",
+    "https://pje.trt13.jus.br/*",
+    "https://pje.trt14.jus.br/*",
+    "https://pje.trt15.jus.br/*",
+    "https://pje.trt16.jus.br/*",
+    "https://pje.trt17.jus.br/*",
+    "https://pje.trt18.jus.br/*",
+    "https://pje.trt19.jus.br/*",
+    "https://pje.trt20.jus.br/*",
+    "https://pje.trt21.jus.br/*",
+    "https://pje.trt22.jus.br/*",
+    "https://pje.trt23.jus.br/*",
+    "https://pje.trt24.jus.br/*",
+    "https://justra.com.br/*",
     "https://staging.justra.com.br/*"
   ],
   "action": {
@@ -29,7 +53,30 @@
   "content_scripts": [
     {
       "matches": [
-        "https://pje.trt2.jus.br/*"
+        "https://pje.trt1.jus.br/*",
+        "https://pje.trt2.jus.br/*",
+        "https://pje.trt3.jus.br/*",
+        "https://pje.trt4.jus.br/*",
+        "https://pje.trt5.jus.br/*",
+        "https://pje.trt6.jus.br/*",
+        "https://pje.trt7.jus.br/*",
+        "https://pje.trt8.jus.br/*",
+        "https://pje.trt9.jus.br/*",
+        "https://pje.trt10.jus.br/*",
+        "https://pje.trt11.jus.br/*",
+        "https://pje.trt12.jus.br/*",
+        "https://pje.trt13.jus.br/*",
+        "https://pje.trt14.jus.br/*",
+        "https://pje.trt15.jus.br/*",
+        "https://pje.trt16.jus.br/*",
+        "https://pje.trt17.jus.br/*",
+        "https://pje.trt18.jus.br/*",
+        "https://pje.trt19.jus.br/*",
+        "https://pje.trt20.jus.br/*",
+        "https://pje.trt21.jus.br/*",
+        "https://pje.trt22.jus.br/*",
+        "https://pje.trt23.jus.br/*",
+        "https://pje.trt24.jus.br/*"
       ],
       "js": [
         "content.js"

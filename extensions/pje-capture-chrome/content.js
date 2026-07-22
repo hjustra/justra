@@ -18,10 +18,12 @@
   const FRAME_CAPTURE_TIMEOUT_MS = 900;
   const FRAME_REQUEST_TYPE = "JUSTRA_COLLECT_OPEN_DOCUMENT";
   const FRAME_RESPONSE_TYPE = "JUSTRA_OPEN_DOCUMENT_RESPONSE";
-  const DOCUMENT_ITEM_RE = /\b(Senten[çc]a|Decis[ãa]o|Despacho|Ac[óo]rd[ãa]o|Ata(?:\s+de\s+audi[êe]ncia)?|Peti[çc][ãa]o|Certid[ãa]o|Intima[çc][ãa]o|Notifica[çc][ãa]o|Alvar[áa]|Mandado|Of[íi]cio|Termo|C[áa]lculo|Laudo|Manifesta[çc][ãa]o|Recurso|Contrarraz[õo]es|Embargos|Contesta[çc][ãa]o|Inicial)\s*(?:\([^)]{1,100}\))?\s*[-–—]\s*([a-f0-9]{6,40})\b/gi;
+  const DOCUMENT_ITEM_RE = /\b(Senten[çc]a|Decis[ãa]o|Despacho|Ac[óo]rd[ãa]o|Ata(?:\s+d[ae]\s+audi[êe]ncia)?|Peti[çc][ãa]o|Certid[ãa]o|Intima[çc][ãa]o|Notifica[çc][ãa]o|Alvar[áa]|Mandado|Of[íi]cio|Termo|C[áa]lculo|Laudo|Manifesta[çc][ãa]o|Recurso|Contrarraz[õo]es|Embargos|Contesta[çc][ãa]o|Inicial)\s*(?:\([^)]{1,100}\))?\s*[-–—]\s*([a-f0-9]{6,40})\b/gi;
   const TEST_URL = "https://pje.trt2.jus.br/consultaprocessual/detalhe-processo/1000717-52.2024.5.02.0202/1#589702a";
+  const CONNECT_STORAGE_PREFIX = "justra_pje_connect:";
 
   let lastPayload = null;
+  let pendingConnect = null;
   let root = null;
   let panel = null;
   let launcher = null;
@@ -41,6 +43,82 @@
 
   function onlyDigits(value) {
     return String(value || "").replace(/\D/g, "");
+  }
+
+  function trtFromHost(host = location.hostname) {
+    const match = String(host || "").match(/^pje\.trt(\d{1,2})\.jus\.br$/i);
+    return match ? `TRT${Number(match[1])}` : "";
+  }
+
+  function storageKeyForHost(host = location.host) {
+    return `${CONNECT_STORAGE_PREFIX}${String(host || "").toLowerCase()}`;
+  }
+
+  function storageGet(key) {
+    return new Promise((resolve) => {
+      try {
+        chrome.storage.local.get(key, (result) => resolve(result ? result[key] : null));
+      } catch (_error) {
+        resolve(null);
+      }
+    });
+  }
+
+  function storageSet(key, value) {
+    return new Promise((resolve) => {
+      try {
+        chrome.storage.local.set({ [key]: value }, resolve);
+      } catch (_error) {
+        resolve();
+      }
+    });
+  }
+
+  function storageRemove(key) {
+    return new Promise((resolve) => {
+      try {
+        chrome.storage.local.remove(key, resolve);
+      } catch (_error) {
+        resolve();
+      }
+    });
+  }
+
+  function parseConnectHash() {
+    const rawHash = String(location.hash || "").replace(/^#/, "");
+    if (!rawHash.includes("justra_pje_connect")) {
+      return null;
+    }
+    const params = new URLSearchParams(rawHash);
+    const token = params.get("justra_pje_connect") || "";
+    if (!token) {
+      return null;
+    }
+    return {
+      connect_token: token,
+      justra_origin: params.get("justra_origin") || "",
+      account_id: params.get("justra_account") || "",
+      host: location.host,
+      trt: trtFromHost(),
+      created_at: new Date().toISOString()
+    };
+  }
+
+  async function loadPendingConnect() {
+    const fromHash = parseConnectHash();
+    const key = storageKeyForHost();
+    if (fromHash) {
+      await storageSet(key, fromHash);
+      pendingConnect = fromHash;
+      try {
+        history.replaceState(null, document.title, `${location.pathname}${location.search}`);
+      } catch (_error) {
+        // If PJe blocks history changes, leaving the hash visible is harmless.
+      }
+      return pendingConnect;
+    }
+    pendingConnect = await storageGet(key);
+    return pendingConnect;
   }
 
   function formatCnj(digits) {
@@ -281,6 +359,17 @@
     return Boolean(document.querySelector("iframe[src*='captcha'], iframe[src*='recaptcha'], iframe[src*='hcaptcha'], .g-recaptcha, [data-sitekey]"));
   }
 
+  function pjeSessionLooksReady(text) {
+    const value = compactSpaces(text || getVisibleText());
+    if (/\b(Sair|Logout|Minhas tarefas|Painel|Caixa de entrada|Expedientes|Meu perfil|Usu[aá]rio logado)\b/i.test(value)) {
+      return true;
+    }
+    if (/\b(Entrar|Login|Senha|Certificado digital|gov\.br|Acessar)\b/i.test(value) && !extractProcessNumber(`${location.href}\n${value}`)) {
+      return false;
+    }
+    return value.length > 400 && !hasCaptcha(value);
+  }
+
   function extractDegreeFromUrl(url) {
     const match = String(url || "").match(/\/detalhe-processo\/[^/]+\/(\d+)/);
     return match ? match[1] : "";
@@ -345,7 +434,7 @@
       ["decisao", /\bDecis[ãa]o\b/i],
       ["despacho", /\bDespacho\b/i],
       ["acordao", /\bAc[óo]rd[ãa]o\b/i],
-      ["ata", /\bAta de audi[êe]ncia\b/i],
+      ["ata", /\bAta d[ae] audi[êe]ncia\b/i],
       ["peticao", /\bPeti[çc][ãa]o\b/i],
       ["certidao", /\bCertid[ãa]o\b/i],
       ["intimacao", /\bIntima[çc][ãa]o\b/i]
@@ -360,7 +449,7 @@
     if (explicitId) {
       return normalizeDocumentCode(explicitId[1]);
     }
-    const marker = textSource.match(/\b(?:Senten[çc]a|Decis[ãa]o|Despacho|Ac[óo]rd[ãa]o|Ata(?:\s+de\s+audi[êe]ncia)?|Peti[çc][ãa]o|Certid[ãa]o|Intima[çc][ãa]o|Notifica[çc][ãa]o|Alvar[áa]|Mandado|Of[íi]cio|Termo|C[áa]lculo|Laudo|Manifesta[çc][ãa]o|Recurso|Contrarraz[õo]es|Embargos|Contesta[çc][ãa]o|Inicial)\s*(?:\([^)]{1,100}\))?\s*[-–—]\s*([a-f0-9]{6,40})\b/i);
+    const marker = textSource.match(/\b(?:Senten[çc]a|Decis[ãa]o|Despacho|Ac[óo]rd[ãa]o|Ata(?:\s+d[ae]\s+audi[êe]ncia)?|Peti[çc][ãa]o|Certid[ãa]o|Intima[çc][ãa]o|Notifica[çc][ãa]o|Alvar[áa]|Mandado|Of[íi]cio|Termo|C[áa]lculo|Laudo|Manifesta[çc][ãa]o|Recurso|Contrarraz[õo]es|Embargos|Contesta[çc][ãa]o|Inicial)\s*(?:\([^)]{1,100}\))?\s*[-–—]\s*([a-f0-9]{6,40})\b/i);
     if (marker) {
       return normalizeDocumentCode(marker[1]);
     }
@@ -889,17 +978,19 @@
     const processDigits = onlyDigits(processNumber);
     const openDocuments = collectOpenDocumentsSync();
     const documentRefs = collectEmbeddedDocumentRefs();
+    const trt = trtFromHost() || "TRT";
     const fieldText = [
       headerText,
       ...openDocuments.map((documentRow) => String(documentRow.content_text || "").slice(0, 6000))
     ].join("\n");
     const payload = {
       schema_version: "justra.pje.capture.v1",
-      source: "pje-trt2-chrome-extension",
-      extension_version: "0.4.0",
+      source: `${trt.toLowerCase()}-chrome-extension`,
+      extension_version: chrome.runtime.getManifest().version,
       captured_at: new Date().toISOString(),
       page: {
         url: location.href,
+        referrer: document.referrer || "",
         host: location.host,
         path: location.pathname,
         title: document.title || "",
@@ -909,7 +1000,7 @@
         number: processNumber,
         number_digits: processDigits.length === 20 ? processDigits : "",
         degree: extractDegreeFromUrl(location.href),
-        tribunal: "TRT2",
+        tribunal: trt,
         class: extractCaseClass(headerText) || firstLabelValue(headerText, ["Classe judicial", "Classe"]),
         court_unit: extractCourtUnit(headerText) || firstLabelValue(headerText, ["Órgão julgador", "Orgao julgador", "Vara", "Unidade judiciária"]),
         filing_date: firstLabelValue(headerText, ["Data de distribuição", "Distribuído em", "Distribuido em", "Autuado em", "Ajuizado em"])
@@ -966,6 +1057,7 @@
       <div class="justra-pje-body">
         <div class="justra-pje-status" data-role="status">Pronto para baixar ou enviar os documentos visíveis.</div>
         <div class="justra-pje-actions">
+          <button class="justra-pje-action" data-action="confirmPjeSession" type="button" hidden>Concluir conexão</button>
           <button class="justra-pje-action" data-primary="true" type="button" data-action="downloadAllDocuments">Baixar todos docs</button>
           <button class="justra-pje-action" type="button" data-action="sendAllDocuments">Enviar para Justra</button>
         </div>
@@ -977,18 +1069,21 @@
       panel.hidden = true;
       launcher.hidden = false;
     });
+    panel.querySelector("[data-action='confirmPjeSession']").addEventListener("click", () => confirmPjeSessionWithJustra());
     panel.querySelector("[data-action='downloadAllDocuments']").addEventListener("click", () => downloadAllDocumentsJson());
     panel.querySelector("[data-action='sendAllDocuments']").addEventListener("click", () => sendAllDocumentsToJustra());
 
     root.appendChild(launcher);
     root.appendChild(panel);
     document.documentElement.appendChild(root);
+    renderPendingConnect();
   }
 
   function openPanel() {
     ensureRoot();
     panel.hidden = false;
     launcher.hidden = true;
+    renderPendingConnect();
     if (!lastPayload) {
       const text = getVisibleText();
       if (hasCaptcha(text)) {
@@ -996,6 +1091,20 @@
       } else {
         setStatus("Pronto para baixar ou enviar os documentos visíveis.", "info");
       }
+    }
+  }
+
+  function renderPendingConnect() {
+    if (!panel) {
+      return;
+    }
+    const button = panel.querySelector("[data-action='confirmPjeSession']");
+    if (!button) {
+      return;
+    }
+    button.hidden = !pendingConnect;
+    if (pendingConnect) {
+      button.textContent = `Concluir conexão ${pendingConnect.trt || trtFromHost() || "PJe"}`;
     }
   }
 
@@ -1119,12 +1228,62 @@
     });
   }
 
+  function confirmSessionIntoJustra(payload) {
+    return new Promise((resolve, reject) => {
+      chrome.runtime.sendMessage({ type: "JUSTRA_CONFIRM_PJE_SESSION", payload }, (response) => {
+        if (chrome.runtime.lastError) {
+          reject(new Error(chrome.runtime.lastError.message));
+          return;
+        }
+        if (!response || !response.ok) {
+          reject(new Error((response && response.error) || "erro desconhecido"));
+          return;
+        }
+        resolve(response.data || {});
+      });
+    });
+  }
+
+  async function confirmPjeSessionWithJustra() {
+    if (!pendingConnect) {
+      setStatus("Não encontrei uma conexão PJe pendente para esta aba.", "warning");
+      return null;
+    }
+    const visibleText = getVisibleText();
+    if (!pjeSessionLooksReady(visibleText)) {
+      setStatus("Entre no PJe primeiro. Depois que a página autenticada carregar, clique em Concluir conexão.", "warning");
+      return null;
+    }
+    setStatus("Confirmando conexão PJe com a Justra...", "info");
+    const payload = {
+      ...pendingConnect,
+      page_url: location.href,
+      host: location.hostname,
+      title: document.title || "",
+      trt: pendingConnect.trt || trtFromHost(),
+      extension_version: chrome.runtime.getManifest().version,
+      confirmed_at: new Date().toISOString()
+    };
+    try {
+      const data = await confirmSessionIntoJustra(payload);
+      await storageRemove(storageKeyForHost());
+      pendingConnect = null;
+      renderPendingConnect();
+      setStatus(`Conexão PJe confirmada em ${data.import_environment_label || "Justra"}.`, "success");
+      return data;
+    } catch (error) {
+      setStatus(`Não consegui confirmar a conexão: ${error.message}`, "error");
+      throw error;
+    }
+  }
+
   async function sendPayloadToJustra(payload) {
     renderSummary(payload);
-    setStatus("Enviando para a Justra local em 127.0.0.1:8787...", "info");
+    setStatus("Enviando para a Justra...", "info");
     try {
       const data = await importPayloadIntoJustra(payload);
-      setStatus(`Enviado para a Justra. Import ID: ${data.import_id || "registrado"}.`, "success");
+      const environmentLabel = data.import_environment_label || "Justra";
+      setStatus(`Enviado para ${environmentLabel}. Import ID: ${data.import_id || "registrado"}.`, "success");
       return data;
     } catch (error) {
       setStatus(`Não consegui enviar: ${error.message}`, "error");
@@ -1169,7 +1328,13 @@
     if (message.type === "JUSTRA_SEND_ALL_DOCUMENTS_NOW") {
       openPanel();
       sendAllDocumentsToJustra()
-        .then(({ payload, importResult }) => sendResponse({ ok: true, ...payloadStats(payload), import_id: importResult.import_id || "" }))
+        .then(({ payload, importResult }) => sendResponse({
+          ok: true,
+          ...payloadStats(payload),
+          import_id: importResult.import_id || "",
+          import_environment: importResult.import_environment || "",
+          import_environment_label: importResult.import_environment_label || ""
+        }))
         .catch((error) => sendResponse({ ok: false, error: error.message }));
       return true;
     }
@@ -1178,4 +1343,11 @@
 
   window.addEventListener("justra:pje:open", openPanel);
   ensureRoot();
+  loadPendingConnect().then((connect) => {
+    renderPendingConnect();
+    if (connect) {
+      openPanel();
+      setStatus("Entre no PJe normalmente e clique em Concluir conexão quando a página carregar.", "info");
+    }
+  });
 })();
