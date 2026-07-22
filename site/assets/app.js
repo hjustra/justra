@@ -2903,20 +2903,25 @@ async function loadPjeAccounts() {
 }
 
 async function createPjeAccount() {
-  const trt = $("#pjeAccountTrt")?.value || "TRT2";
+  const trts = $$("input[name='pjeAccountTrt']:checked").map((item) => item.value).filter(Boolean);
   const oab = ($("#pjeAccountOab")?.value || "").trim();
   const uf = ($("#pjeAccountUf")?.value || "").trim().toUpperCase();
+  if (!trts.length) {
+    $("#pjeAccountStatus").textContent = "Selecione ao menos um TRT de atuação.";
+    return;
+  }
   if (!oab) {
     $("#pjeAccountStatus").textContent = "Informe a OAB.";
     return;
   }
-  $("#pjeAccountStatus").textContent = "Criando conexão PJe e enfileirando login assistido...";
+  $("#pjeAccountStatus").textContent = `Criando ${fmt(trts.length)} conexão(ões) PJe e enfileirando login assistido...`;
   const data = await api("/api/pje/accounts", {
     method: "POST",
-    body: JSON.stringify({ trt, oab, uf }),
+    body: JSON.stringify({ trts, oab, uf }),
   });
   renderPjeAccounts(data);
-  $("#pjeAccountStatus").textContent = "Conexão PJe criada. A fila do operador recebeu o job de login.";
+  const created = Number(data.created_accounts?.length || trts.length || 0);
+  $("#pjeAccountStatus").textContent = `${fmt(created)} conexão(ões) PJe criada(s). A fila do operador recebeu os jobs de login.`;
 }
 
 async function runPjeAccountAction(accountId, action) {

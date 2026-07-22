@@ -3345,6 +3345,25 @@ class JustraApp:
             raise ValueError("TRT PJe inválido")
         return f"TRT{number}"
 
+    def _normalize_pje_trts(self, payload: dict[str, Any]) -> list[str]:
+        raw_values = payload.get("trts")
+        values: list[Any]
+        if isinstance(raw_values, list):
+            values = raw_values
+        elif isinstance(raw_values, str) and raw_values.strip():
+            values = re.split(r"[,;\s]+", raw_values.strip())
+        else:
+            values = [payload.get("trt") or "TRT2"]
+        normalized = [
+            self._normalize_pje_trt(value)
+            for value in values
+            if str(value or "").strip()
+        ]
+        unique = list(dict.fromkeys(normalized))
+        if not unique:
+            raise ValueError("selecione ao menos um TRT")
+        return unique
+
     @staticmethod
     def _normalize_pje_oab(value: Any) -> str:
         raw = re.sub(r"\s+", "", str(value or "").upper())
@@ -3412,15 +3431,7 @@ class JustraApp:
         accounts.sort(key=lambda item: (str(item.get("trt") or ""), str(item.get("oab") or ""), str(item.get("created_at") or "")))
         return {"ok": True, "accounts": accounts, "generated_at": now_iso()}
 
-    def upsert_pje_account(self, user: dict[str, Any], payload: dict[str, Any]) -> dict[str, Any]:
-        if not isinstance(payload, dict):
-            raise ValueError("payload inválido")
-        self._reject_pje_credential_payload(payload)
-        user_id = str(user.get("id") or "")
-        office_id = re.sub(r"[^A-Za-z0-9_.@-]+", "-", str(payload.get("office_id") or user.get("office_id") or user_id)).strip("-")[:80] or user_id
-        trt = self._normalize_pje_trt(payload.get("trt") or "TRT2")
-        oab = self._normalize_pje_oab(payload.get("oab"))
-        uf = self._normalize_pje_oab_uf(payload.get("uf"))
+    def _upsert_pje_account_record(self, user_id: str, office_id: str, trt: str, oab: str, uf: str) -> dict[str, Any]:
         account_id = self._pje_account_id(user_id, office_id, trt, oab, uf)
         now_text = now_iso()
         with self.pje_accounts_lock:
@@ -3446,10 +3457,35 @@ class JustraApp:
             accounts[account_id] = account
             self.pje_accounts.setdefault("worker", {})["last_upsert_at"] = now_text
             self._save_pje_accounts()
-        self._append_pje_account_event(account_id, "upserted", {"user_id": user_id, "trt": trt, "oab": oab, "uf": uf})
-        job = self.enqueue_pje_account_job(account, PJE_JOB_TYPE_LOGIN_SESSION, reason="pje_account_login", priority=85, force=True)
-        self._set_pje_account_job_state(account_id, job, "login_queued")
-        return {"ok": True, "account": self._pje_account_for_user(user, account_id), "job": job, **self.list_pje_accounts(user)}
+        return copy.deepcopy(account)
+
+    def upsert_pje_account(self, user: dict[str, Any], payload: dict[str, Any]) -> dict[str, Any]:
+        if not isinstance(payload, dict):
+            raise ValueError("payload inválido")
+        self._reject_pje_credential_payload(payload)
+        user_id = str(user.get("id") or "")
+        office_id = re.sub(r"[^A-Za-z0-9_.@-]+", "-", str(payload.get("office_id") or user.get("office_id") or user_id)).strip("-")[:80] or user_id
+        trts = self._normalize_pje_trts(payload)
+        oab = self._normalize_pje_oab(payload.get("oab"))
+        uf = self._normalize_pje_oab_uf(payload.get("uf"))
+        created_accounts: list[dict[str, Any]] = []
+        jobs: list[dict[str, Any]] = []
+        for trt in trts:
+            account = self._upsert_pje_account_record(user_id, office_id, trt, oab, uf)
+            account_id = str(account.get("id") or "")
+            self._append_pje_account_event(account_id, "upserted", {"user_id": user_id, "trt": trt, "oab": oab, "uf": uf})
+            job = self.enqueue_pje_account_job(account, PJE_JOB_TYPE_LOGIN_SESSION, reason="pje_account_login", priority=85, force=True)
+            self._set_pje_account_job_state(account_id, job, "login_queued")
+            created_accounts.append(self._pje_account_for_user(user, account_id))
+            jobs.append(job)
+        return {
+            "ok": True,
+            "account": created_accounts[0] if created_accounts else None,
+            "job": jobs[0] if jobs else None,
+            "created_accounts": created_accounts,
+            "jobs": jobs,
+            **self.list_pje_accounts(user),
+        }
 
     def _set_pje_account_job_state(self, account_id: str, job: dict[str, Any], session_status: str) -> None:
         with self.pje_accounts_lock:
