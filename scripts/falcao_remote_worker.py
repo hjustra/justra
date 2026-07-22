@@ -45,6 +45,12 @@ def today_local() -> dt.date:
     return dt.datetime.now(APP_TZ).date()
 
 
+def plan_window(days: int) -> tuple[dt.date, dt.date]:
+    end = today_local() - dt.timedelta(days=1)
+    start = end - dt.timedelta(days=max(1, days) - 1)
+    return start, end
+
+
 def atomic_json(path: Path, payload: dict[str, object]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     temporary = path.with_suffix(path.suffix + ".tmp")
@@ -106,10 +112,38 @@ def line_count(path: Path) -> int:
         return sum(1 for line in handle if line.strip())
 
 
+def daily_date_from_name(path: Path) -> dt.date | None:
+    if not path.name.startswith("daily_"):
+        return None
+    try:
+        return dt.date.fromisoformat(path.name.removeprefix("daily_"))
+    except ValueError:
+        return None
+
+
+def choose_target_date(plan_days: int) -> dt.date:
+    """Resume the oldest incomplete daily run before opening a new D-1 run."""
+    raw_root = DATA_ROOT / "raw" / "falcao"
+    start, end = plan_window(plan_days)
+    incomplete: list[dt.date] = []
+    if raw_root.exists():
+        for directory in raw_root.iterdir():
+            if not directory.is_dir():
+                continue
+            day = daily_date_from_name(directory)
+            if day is None or day < start or day > end:
+                continue
+            status = load_json(directory / "status.json")
+            checkpoint = load_json(directory / "checkpoint.json")
+            has_run_evidence = bool(status or checkpoint or (directory / "requests.jsonl").exists())
+            if has_run_evidence and not status.get("complete"):
+                incomplete.append(day)
+    return min(incomplete) if incomplete else end
+
+
 def parse_args() -> argparse.Namespace:
-    default_date = (today_local() - dt.timedelta(days=1)).isoformat()
     parser = argparse.ArgumentParser(description="Hostinger Falcao worker with Azure import.")
-    parser.add_argument("--start-date", default=os.getenv("FALCAO_START_DATE", default_date))
+    parser.add_argument("--start-date", default=os.getenv("FALCAO_START_DATE", ""))
     parser.add_argument("--end-date", default=os.getenv("FALCAO_END_DATE", ""))
     parser.add_argument("--mode", default=os.getenv("FALCAO_MODE", "d-1"))
     parser.add_argument("--output-tag", default=os.getenv("FALCAO_OUTPUT_TAG", ""))
@@ -128,9 +162,14 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--azure-app-dir", default=os.getenv("FALCAO_AZURE_APP_DIR", "/opt/justra/app"))
     parser.add_argument("--azure-data-dir", default=os.getenv("FALCAO_AZURE_DATA_DIR", "/mnt/justra-data"))
     parser.add_argument("--azure-service", default=os.getenv("FALCAO_AZURE_SERVICE", "justra"))
+    parser.add_argument("--plan-days", type=int, default=int(os.getenv("FALCAO_PLAN_DAYS", "90")))
     parser.add_argument("--skip-sync", action="store_true", default=os.getenv("FALCAO_SKIP_SYNC", "0") == "1")
     parser.add_argument("--skip-import", action="store_true", default=os.getenv("FALCAO_SKIP_IMPORT", "0") == "1")
     args = parser.parse_args()
+    if not args.start_date and args.mode == "d-1":
+        args.start_date = choose_target_date(args.plan_days).isoformat()
+    if not args.start_date:
+        args.start_date = (today_local() - dt.timedelta(days=1)).isoformat()
     args.end_date = args.end_date or args.start_date
     if not args.output_tag:
       args.output_tag = (
