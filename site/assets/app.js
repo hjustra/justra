@@ -837,7 +837,9 @@ function optionHtml(value, label, total) {
 
 function populateFilters(filters) {
   state.filters = filters;
+  const currentPeriod = $("#periodFilter").value || "year_2026";
   $("#periodFilter").innerHTML = filters.periods.map((item) => optionHtml(item.value, item.label)).join("");
+  $("#periodFilter").value = filters.periods.some((item) => item.value === currentPeriod) ? currentPeriod : "year_2026";
   $("#claimFilter").innerHTML = optionHtml("", "Todos") + filters.claims.map((item) => optionHtml(item.value, item.label, item.total)).join("");
   $("#courtFilter").innerHTML = optionHtml("", "Todas") + filters.courts.map((item) => optionHtml(item.value, item.label, item.total)).join("");
   $("#outcomeFilter").innerHTML = optionHtml("", "Todos") + filters.outcomes.map((item) => optionHtml(item.value, item.label)).join("");
@@ -1064,8 +1066,20 @@ function renderCards(container, cards) {
 
 function renderJurimetrics(data) {
   const summary = data.summary;
+  const coverage = data.coverage || {};
+  const notice = $("#jurimetricsCoverageNotice");
+  if (notice) {
+    const latest = coverage.latest_activity_date ? formatDataJudDate(coverage.latest_activity_date) : "";
+    const message = coverage.warning
+      ? coverage.warning.replace(/(\d{4}-\d{2}-\d{2})/g, (match) => formatDataJudDate(match))
+      : !Number(summary.processes || 0) && latest
+        ? `Sem processos para este recorte. A última movimentação DataJud carregada é ${latest}.`
+        : "";
+    notice.textContent = message;
+    notice.hidden = !message;
+  }
   renderCards($("#summaryCards"), [
-    { label: "Processos", value: fmt(summary.processes), note: `${data.filters.period.label} · DataJud TRT2` },
+    { label: "Processos", value: fmt(summary.processes), note: `${data.filters.period.label} · atividade DataJud TRT2` },
     { label: "Classificados", value: fmt(summary.classified_processes), note: "com pedido/assunto" },
     { label: "Julgamento/decisão", value: fmt(summary.judged_processes), note: "movimentos DataJud" },
     { label: "Desfecho final", value: fmt(summary.final_outcome_processes), note: "heurística" },

@@ -1598,6 +1598,10 @@ def date_to_datajud_int(value: str) -> int:
     return int(value.replace("-", "") + "000000")
 
 
+def sql_date_prefix(column: str) -> str:
+    return f"SUBSTR(CAST({column} AS VARCHAR), 1, 10)"
+
+
 def period_from_key(period_key: str, start: str = "", end: str = "") -> dict[str, Any]:
     current = date.today()
     if period_key == "all":
@@ -9474,9 +9478,9 @@ class JustraApp:
             "courts": [{"value": item["court_unit"], "label": item["court_unit"], "total": item["total"]} for item in self.courts],
             "judges": [{"value": row[0], "label": row[0], "total": row[1]} for row in judges],
             "periods": [
-                {"value": "last_month", "label": "Último mês"},
-                {"value": "last_90", "label": "Últimos 90 dias"},
                 {"value": "year_2026", "label": "2026"},
+                {"value": "last_90", "label": "Últimos 90 dias"},
+                {"value": "last_month", "label": "Últimos 30 dias"},
                 {"value": "all", "label": "Todo o acervo"},
             ],
             "outcomes": [{"value": item, "label": item.replace("_", " ")} for item in FINAL_OUTCOMES],
@@ -9488,8 +9492,32 @@ class JustraApp:
         params: list[Any] = []
         period = filters["period"]
         if period["key"] != "all":
-            clauses.append("p.filing_date >= ? AND p.filing_date < ?")
-            params.extend([date_to_datajud_int(period["start"]), date_to_datajud_int(period["end"])])
+            movement_date = sql_date_prefix("m_period.movement_date")
+            decision_date = sql_date_prefix("d_period.movement_date")
+            clauses.append(
+                f"""(
+                    (p.filing_date >= ? AND p.filing_date < ?)
+                    OR p.process_number IN (
+                        SELECT DISTINCT m_period.process_number
+                        FROM movements m_period
+                        WHERE {movement_date} >= ? AND {movement_date} < ?
+                        UNION
+                        SELECT DISTINCT d_period.process_number
+                        FROM decision_events d_period
+                        WHERE {decision_date} >= ? AND {decision_date} < ?
+                    )
+                )"""
+            )
+            params.extend(
+                [
+                    date_to_datajud_int(period["start"]),
+                    date_to_datajud_int(period["end"]),
+                    period["start"],
+                    period["end"],
+                    period["start"],
+                    period["end"],
+                ]
+            )
         if filters.get("court_unit"):
             clauses.append("p.court_unit = ?")
             params.append(filters["court_unit"])
@@ -9519,7 +9547,8 @@ class JustraApp:
         params: list[Any] = []
         period = filters["period"]
         if period["key"] != "all":
-            clauses.append("CAST(d.movement_date AS DATE) >= CAST(? AS DATE) AND CAST(d.movement_date AS DATE) < CAST(? AS DATE)")
+            movement_date = sql_date_prefix("d.movement_date")
+            clauses.append(f"{movement_date} >= ? AND {movement_date} < ?")
             params.extend([period["start"], period["end"]])
         if filters.get("court_unit"):
             clauses.append("d.court_unit = ?")
@@ -9545,7 +9574,7 @@ class JustraApp:
 
     def jurimetrics(self, params: dict[str, list[str]]) -> dict[str, Any]:
         period = period_from_key(
-            params.get("period", ["last_month"])[0],
+            params.get("period", ["year_2026"])[0],
             params.get("start", [""])[0],
             params.get("end", [""])[0],
         )
@@ -9564,6 +9593,17 @@ class JustraApp:
         d_joins, d_where, d_params = self._decision_scope(filters)
         final_marks = ",".join(["?"] * len(FINAL_OUTCOMES))
         judged_marks = ",".join(["?"] * len(JUDGED_OUTCOMES))
+        latest_filing_raw = str(self.one("SELECT MAX(CAST(filing_date AS VARCHAR)) FROM processes") or "")
+        latest_movement_date = str(self.one(f"SELECT MAX({sql_date_prefix('movement_date')}) FROM movements") or "")
+        latest_decision_date = str(self.one(f"SELECT MAX({sql_date_prefix('movement_date')}) FROM decision_events") or "")
+        latest_activity_date = max([item for item in [latest_movement_date, latest_decision_date] if item] or [""])
+        coverage_warning = ""
+        if period["key"] != "all" and latest_activity_date and latest_activity_date < period["start"]:
+            coverage_warning = (
+                f"A base DataJud processual carregada tem movimentações até {latest_activity_date}. "
+                f"O filtro selecionado começa em {period['start']}, por isso este recorte pode ficar vazio "
+                "até a próxima carga ampla do DataJud."
+            )
 
         process_count = self.one(f"SELECT COUNT(DISTINCT p.process_number) FROM processes p {p_joins} WHERE {p_where}", p_params)
         classified_count = self.one(
@@ -9763,6 +9803,13 @@ class JustraApp:
                 "full_text_documents": full_text_count,
                 "judges_identified": judge_count,
             },
+            "coverage": {
+                "latest_filing_date": latest_filing_raw[:8] if latest_filing_raw else "",
+                "latest_movement_date": latest_movement_date,
+                "latest_decision_date": latest_decision_date,
+                "latest_activity_date": latest_activity_date,
+                "warning": coverage_warning,
+            },
             "outcomes": [{"outcome": row[0], "total": row[1]} for row in outcomes],
             "top_claims": [{"claim_type": row[0], "total": row[1]} for row in top_claims],
             "top_subjects": [{"subject": row[0], "total": row[1]} for row in top_subjects],
@@ -9793,7 +9840,7 @@ class JustraApp:
             "pagination": {"limit": limit, "offset": offset, "returned": len(process_rows)},
             "notes": [
                 "Jurimetria processual usa processos DataJud do TRT2; o acervo Falcão nacional aparece no mapa de cobertura e na busca jurídica.",
-                "Processos são filtrados por data de ajuizamento; desfechos são filtrados por data do movimento.",
+                "Processos são filtrados por ajuizamento ou atividade no período; desfechos são filtrados por data do movimento.",
                 "Favorável ao trabalhador é proxy: procedente ou procedente_parcial.",
                 "Inteiro teor e juiz contam apenas documentos casados com processos do recorte filtrado.",
             ],
