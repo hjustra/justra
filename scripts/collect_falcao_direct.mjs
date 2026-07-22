@@ -1,6 +1,7 @@
 import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
+import readline from "node:readline/promises";
 import { createRequire } from "node:module";
 import { fileURLToPath } from "node:url";
 
@@ -33,6 +34,79 @@ function browserLaunchOptions(headed, extra = {}) {
   const options = { ...extra, headless: !headed };
   if (CHROME_PATH) options.executablePath = CHROME_PATH;
   return options;
+}
+
+async function newBrowserContext(args) {
+  if (args.connectCdp) {
+    const browser = await chromium.connectOverCDP(args.connectCdp);
+    const context = browser.contexts()[0];
+    if (!context) {
+      throw new Error(`Nenhum contexto de navegador disponível em ${args.connectCdp}.`);
+    }
+    return {
+      browser,
+      context,
+      persistent: false,
+      remoteCdp: true,
+      userDataDir: "",
+      closeContext: false,
+      disconnectBrowser: true,
+    };
+  }
+
+  const headed = Boolean(args.headed || args.authSetup);
+  const launchOptions = browserLaunchOptions(headed, { timeout: 90_000 });
+  if (args.userDataDir) {
+    const userDataDir = path.resolve(args.userDataDir);
+    fs.mkdirSync(userDataDir, { recursive: true, mode: 0o700 });
+    const context = await chromium.launchPersistentContext(userDataDir, {
+      ...launchOptions,
+      locale: "pt-BR",
+      viewport: { width: 1440, height: 1000 },
+    });
+    return { browser: null, context, persistent: true, userDataDir };
+  }
+  const browser = await chromium.launch(launchOptions);
+  const chromeVersion = browser.version();
+  const context = await browser.newContext({
+    locale: "pt-BR",
+    userAgent:
+      `Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) ` +
+      `AppleWebKit/537.36 (KHTML, like Gecko) Chrome/${chromeVersion} Safari/537.36`,
+  });
+  return { browser, context, persistent: false, userDataDir: "" };
+}
+
+async function waitForInteractiveAuth(page, args) {
+  console.log(
+    JSON.stringify(
+      {
+        event: "falcao_auth_setup_started",
+        frontend_url: FRONTEND_URL,
+        user_data_dir: path.resolve(args.userDataDir),
+        wait_minutes: args.authWaitMinutes,
+        instructions:
+          "Faça login no navegador aberto. Quando terminar, volte ao terminal e pressione Enter; se não pressionar, encerro no timeout.",
+      },
+      null,
+      2,
+    ),
+  );
+  const timeoutMs = Math.round(args.authWaitMinutes * 60_000);
+  if (!process.stdin.isTTY) {
+    await sleep(timeoutMs);
+    return;
+  }
+  const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
+  try {
+    await Promise.race([
+      rl.question("Depois de concluir o login no Falcão/gov.br, pressione Enter para salvar a sessão..."),
+      sleep(timeoutMs),
+    ]);
+  } finally {
+    rl.close();
+  }
+  await page.waitForTimeout(1_000);
 }
 
 const COLLECTIONS = [
@@ -90,6 +164,10 @@ function parseArgs(argv) {
     controlPath: "",
     collections: COLLECTIONS.map((item) => item.id),
     headed: false,
+    connectCdp: process.env.FALCAO_CDP_ENDPOINT || "",
+    userDataDir: process.env.FALCAO_USER_DATA_DIR || "",
+    authSetup: false,
+    authWaitMinutes: 15,
     validateOnly: false,
     mode: "d-1",
   };
@@ -113,6 +191,10 @@ function parseArgs(argv) {
       args.blockCooldownMinutes = Number(argv[++index]);
     } else if (value === "--output-tag") args.outputTag = argv[++index];
     else if (value === "--control-path") args.controlPath = argv[++index];
+    else if (value === "--connect-cdp") args.connectCdp = argv[++index];
+    else if (value === "--user-data-dir") args.userDataDir = argv[++index];
+    else if (value === "--auth-setup") args.authSetup = true;
+    else if (value === "--auth-wait-minutes") args.authWaitMinutes = Number(argv[++index]);
     else if (value === "--collections") {
       args.collections = argv[++index].split(",").filter(Boolean);
     } else if (value === "--headed") args.headed = true;
@@ -142,6 +224,7 @@ function parseArgs(argv) {
     requestBudget: args.requestBudget,
     nonBlockRetries: args.nonBlockRetries,
     minimumBlockFreeMinutes: args.minimumBlockFreeMinutes,
+    authWaitMinutes: args.authWaitMinutes,
   })) {
     if (!Number.isFinite(number) || number < 0) {
       throw new Error(`${name} deve ser um número não negativo.`);
@@ -152,6 +235,15 @@ function parseArgs(argv) {
   }
   if (!Number.isInteger(args.nonBlockRetries) || args.nonBlockRetries < 0 || args.nonBlockRetries > 5) {
     throw new Error("--non-block-retries deve ser um inteiro entre 0 e 5.");
+  }
+  if (!Number.isFinite(args.authWaitMinutes) || args.authWaitMinutes < 1 || args.authWaitMinutes > 120) {
+    throw new Error("--auth-wait-minutes deve ficar entre 1 e 120.");
+  }
+  if (args.authSetup && !args.userDataDir) {
+    throw new Error("--auth-setup exige --user-data-dir para salvar a sessão.");
+  }
+  if (args.authSetup && args.connectCdp) {
+    throw new Error("--auth-setup não deve ser usado junto com --connect-cdp.");
   }
   const known = new Set(COLLECTIONS.map((item) => item.id));
   for (const collection of args.collections) {
@@ -776,18 +868,25 @@ async function main() {
     return complete;
   }
 
-  let browser;
+  let browser = null;
+  let context = null;
+  let browserState = null;
   try {
-    browser = await chromium.launch(browserLaunchOptions(args.headed, { timeout: 90_000 }));
-    const chromeVersion = browser.version();
-    const context = await browser.newContext({
-      locale: "pt-BR",
-      userAgent:
-        `Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) ` +
-        `AppleWebKit/537.36 (KHTML, like Gecko) Chrome/${chromeVersion} Safari/537.36`,
-    });
-    page = await context.newPage();
+    browserState = await newBrowserContext(args);
+    browser = browserState.browser;
+    context = browserState.context;
+    page =
+      context.pages().find((candidate) => candidate.url().startsWith(FRONTEND_URL)) ||
+      context.pages()[0] ||
+      await context.newPage();
     state.session_id = sessionId();
+    state.auth_mode = args.connectCdp
+      ? "connected_chrome_cdp"
+      : args.userDataDir
+        ? "persistent_browser_profile"
+        : "anonymous_browser_context";
+    state.cdp_endpoint = args.connectCdp || "";
+    state.user_data_dir = args.userDataDir ? path.resolve(args.userDataDir) : "";
     saveState();
     const navigation = await page.goto(FRONTEND_URL, {
       waitUntil: "domcontentloaded",
@@ -806,6 +905,15 @@ async function main() {
         throw new BlockedError(`Frontend respondeu HTTP ${status}.`);
       }
       throw new Error(`Frontend respondeu HTTP ${status}.`);
+    }
+    if (args.authSetup) {
+      await waitForInteractiveAuth(page, args);
+      state.current = null;
+      state.finished_at = nowIso();
+      state.complete = true;
+      state.result = "auth_setup_complete";
+      saveState();
+      return;
     }
 
     let allComplete = true;
@@ -885,7 +993,14 @@ async function main() {
     saveState();
     console.error(error?.stack || String(error));
   } finally {
-    if (browser) await browser.close().catch(() => {});
+    if (context && browserState?.closeContext !== false) {
+      await context.close().catch(() => {});
+    }
+    if (browserState?.disconnectBrowser && browser?.disconnect) {
+      browser.disconnect();
+    } else if (browser) {
+      await browser.close().catch(() => {});
+    }
   }
 }
 
