@@ -4535,6 +4535,78 @@ a {
   background: #f4f6f5;
 }
 
+.pje-account-panel {
+  display: grid;
+  gap: 12px;
+  padding: 16px;
+}
+
+.pje-account-form {
+  display: grid;
+  grid-template-columns: 120px minmax(180px, 1fr) 90px auto;
+  gap: 10px;
+  align-items: end;
+}
+
+.pje-account-form label {
+  display: grid;
+  gap: 6px;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 850;
+}
+
+.pje-account-form button,
+.pje-account-item button {
+  min-height: 36px;
+  padding: 0 12px;
+  border: 1px solid var(--teal);
+  border-radius: 8px;
+  color: #fff;
+  background: var(--teal);
+  font-size: 12px;
+  font-weight: 950;
+}
+
+.pje-account-list {
+  display: grid;
+  gap: 8px;
+}
+
+.pje-account-item {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 12px;
+  align-items: center;
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #fbfcfc;
+}
+
+.pje-account-item > div {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+}
+
+.pje-account-item > div:first-child {
+  display: grid;
+  gap: 3px;
+}
+
+.pje-account-item span {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.pje-account-item button {
+  color: var(--teal);
+  border-color: var(--line);
+  background: #fff;
+}
+
 .process-center-actions {
   display: flex;
   flex-wrap: wrap;
@@ -5119,7 +5191,12 @@ a {
   .deadline-action-grid,
   .updates-action-grid,
   .movement-lawyer-fields,
-  .deadline-lawyer-fields {
+  .deadline-lawyer-fields,
+  .pje-account-form {
+    grid-template-columns: 1fr;
+  }
+
+  .pje-account-item {
     grid-template-columns: 1fr;
   }
 

@@ -22,6 +22,16 @@ import requests
 ROOT = Path(__file__).resolve().parents[1]
 ORIGIN_BLOCK_MARKER = "PJE_ORIGIN_BLOCKED"
 ORIGIN_BLOCK_EXIT_CODE = 12
+PJE_JOB_TYPE_PUBLIC_COLLECT = "pje_collect_public_process"
+PJE_JOB_TYPE_LOGIN_SESSION = "pje_login_session"
+PJE_JOB_TYPE_SYNC_ACCOUNT = "pje_sync_account_processes"
+PJE_JOB_TYPE_AUTH_COLLECT = "pje_collect_authenticated_process"
+PJE_PUBLIC_JOB_TYPES = {"", PJE_JOB_TYPE_PUBLIC_COLLECT, "process_collect"}
+PJE_ACCOUNT_JOB_TYPES = {
+    PJE_JOB_TYPE_LOGIN_SESSION,
+    PJE_JOB_TYPE_SYNC_ACCOUNT,
+    PJE_JOB_TYPE_AUTH_COLLECT,
+}
 
 
 def short_tail(value: str, limit: int = 12_000) -> str:
@@ -100,6 +110,37 @@ def run_collector(job: dict[str, Any], justra_url: str, extra_args: list[str]) -
     )
 
 
+def account_job_manual_result(job: dict[str, Any]) -> tuple[bool, str, dict[str, Any]]:
+    job_type = str(job.get("job_type") or "")
+    account_label = " · ".join(
+        value
+        for value in [
+            str(job.get("trt") or job.get("tribunal") or "").strip(),
+            f"OAB {job.get('oab')}" if job.get("oab") else "",
+        ]
+        if value
+    )
+    if job_type == PJE_JOB_TYPE_LOGIN_SESSION:
+        message = (
+            "Sessão assistida PJe ainda precisa da ponte interativa do worker; "
+            "nenhuma senha, certificado ou credencial foi solicitada nem armazenada."
+        )
+    elif job_type == PJE_JOB_TYPE_SYNC_ACCOUNT:
+        message = "Sincronização PJe autenticada aguardando sessão interativa válida para esta conta."
+    elif job_type == PJE_JOB_TYPE_AUTH_COLLECT:
+        message = "Coleta PJe autenticada aguardando sessão interativa válida para esta conta."
+    else:
+        message = f"Tipo de job PJe não suportado pelo worker: {job_type or 'vazio'}."
+    if account_label:
+        message = f"{message} ({account_label})"
+    return False, message, {
+        "failure_kind": "manual_required",
+        "job_type": job_type,
+        "account_id": str(job.get("account_id") or ""),
+        "session_dir": str(job.get("session_dir") or ""),
+    }
+
+
 def collector_failure_kind(completed: subprocess.CompletedProcess[str]) -> str:
     output = f"{completed.stdout or ''}\n{completed.stderr or ''}"
     if completed.returncode == ORIGIN_BLOCK_EXIT_CODE or ORIGIN_BLOCK_MARKER in output:
@@ -166,6 +207,21 @@ def main(argv: list[str] | None = None) -> int:
         idle_since = time.monotonic()
         job_id = str(job.get("id") or "")
         try:
+            job_type = str(job.get("job_type") or PJE_JOB_TYPE_PUBLIC_COLLECT)
+            if job_type in PJE_ACCOUNT_JOB_TYPES:
+                ok, error, result = account_job_manual_result(job)
+                print(f"[agent] Job {job_id} requer etapa interativa: {error}")
+                finish_job(args.justra_url, token, job_id, ok, error=error, result=result)
+                if args.once:
+                    return 1
+                continue
+            if job_type not in PJE_PUBLIC_JOB_TYPES:
+                ok, error, result = account_job_manual_result(job)
+                print(f"[agent] Job {job_id} ignorado: {error}")
+                finish_job(args.justra_url, token, job_id, ok, error=error, result=result)
+                if args.once:
+                    return 1
+                continue
             completed = run_collector(job, args.justra_url, extra_args)
             if completed.stdout:
                 print(completed.stdout)

@@ -60,6 +60,8 @@ DATAJUD_JOBS_PATH = APP_DATA_DIR / "datajud_jobs.json"
 PJE_EXTENSION_IMPORTS_PATH = APP_DATA_DIR / "pje_extension_imports.jsonl"
 PJE_JOBS_PATH = APP_DATA_DIR / "pje_jobs.json"
 PJE_JOB_EVENTS_PATH = APP_DATA_DIR / "pje_job_events.jsonl"
+PJE_ACCOUNTS_PATH = APP_DATA_DIR / "pje_accounts.json"
+PJE_ACCOUNT_EVENTS_PATH = APP_DATA_DIR / "pje_account_events.jsonl"
 ACTIVE_DEADLINE_LOOKBACK_DAYS = 30
 ACTIVE_UPDATE_LOOKBACK_DAYS = 30
 DATAJUD_REFRESH_HOURS = 6
@@ -79,6 +81,15 @@ PJE_JOB_MAX_ATTEMPTS = 3
 PJE_JOB_STALE_LOCK_MINUTES = 20
 PJE_USER_WAIT_SECONDS = 60
 PJE_OPERATOR_RETRY_MINUTES = 10
+PJE_JOB_TYPE_PUBLIC_COLLECT = "pje_collect_public_process"
+PJE_JOB_TYPE_LOGIN_SESSION = "pje_login_session"
+PJE_JOB_TYPE_SYNC_ACCOUNT = "pje_sync_account_processes"
+PJE_JOB_TYPE_AUTH_COLLECT = "pje_collect_authenticated_process"
+PJE_ACCOUNT_JOB_TYPES = {
+    PJE_JOB_TYPE_LOGIN_SESSION,
+    PJE_JOB_TYPE_SYNC_ACCOUNT,
+    PJE_JOB_TYPE_AUTH_COLLECT,
+}
 DATAJUD_LABOR_COURTS = [f"trt{number}" for number in range(1, 25)] + ["tst"]
 DATAJUD_ENDPOINTS = {
     **{
@@ -1746,6 +1757,8 @@ class JustraApp:
         self.datajud_jobs = load_json_file(DATAJUD_JOBS_PATH, {"jobs": {}, "worker": {}})
         self.pje_jobs_lock = threading.Lock()
         self.pje_jobs = load_json_file(PJE_JOBS_PATH, {"jobs": {}, "worker": {}})
+        self.pje_accounts_lock = threading.Lock()
+        self.pje_accounts = load_json_file(PJE_ACCOUNTS_PATH, {"accounts": {}, "worker": {}})
         self.datajud_refreshing: set[str] = set()
         self.datajud_worker_stop = threading.Event()
         self.datajud_worker_thread: threading.Thread | None = None
@@ -1768,6 +1781,12 @@ class JustraApp:
             self.pje_jobs["jobs"] = {}
         if not isinstance(self.pje_jobs.get("worker"), dict):
             self.pje_jobs["worker"] = {}
+        if not isinstance(self.pje_accounts, dict):
+            self.pje_accounts = {"accounts": {}, "worker": {}}
+        if not isinstance(self.pje_accounts.get("accounts"), dict):
+            self.pje_accounts["accounts"] = {}
+        if not isinstance(self.pje_accounts.get("worker"), dict):
+            self.pje_accounts["worker"] = {}
         self.audio_playback_lock = threading.Lock()
         self.audio_playback_tokens: dict[str, dict[str, Any]] = {}
         if not isinstance(self.cases, dict):
@@ -3258,6 +3277,9 @@ class JustraApp:
     def _save_pje_jobs(self) -> None:
         save_json_file(PJE_JOBS_PATH, self.pje_jobs)
 
+    def _save_pje_accounts(self) -> None:
+        save_json_file(PJE_ACCOUNTS_PATH, self.pje_accounts)
+
     @staticmethod
     def _official_pje_url_for_process(process_number: str, degree: str = "1") -> str:
         digits = compact_process_number(process_number)
@@ -3272,6 +3294,27 @@ class JustraApp:
         digits = compact_process_number(process_number)
         return f"pje:{digits}" if digits else ""
 
+    @staticmethod
+    def _pje_account_login_url(trt: str) -> str:
+        digits = only_digits(trt)
+        number = str(int(digits or "2") or 2)
+        return f"https://pje.trt{number}.jus.br/primeirograu"
+
+    @staticmethod
+    def _pje_account_job_id(account_id: str, job_type: str, process_number: str = "") -> str:
+        safe_account_id = re.sub(r"[^A-Za-z0-9_.:-]+", "-", str(account_id or "")).strip("-")
+        if not safe_account_id:
+            return ""
+        compact = compact_process_number(process_number)
+        suffix = {
+            PJE_JOB_TYPE_LOGIN_SESSION: "login",
+            PJE_JOB_TYPE_SYNC_ACCOUNT: "sync",
+            PJE_JOB_TYPE_AUTH_COLLECT: "auth",
+        }.get(str(job_type or ""), "account")
+        if compact:
+            return f"pjeacct:{suffix}:{safe_account_id}:{compact}"
+        return f"pjeacct:{suffix}:{safe_account_id}"
+
     def _append_pje_job_event(self, job_id: str, event: str, detail: dict[str, Any] | None = None) -> None:
         record = {
             "created_at": now_iso(),
@@ -3280,6 +3323,262 @@ class JustraApp:
             "detail": detail or {},
         }
         append_jsonl_file(PJE_JOB_EVENTS_PATH, record)
+
+    def _append_pje_account_event(self, account_id: str, event: str, detail: dict[str, Any] | None = None) -> None:
+        record = {
+            "created_at": now_iso(),
+            "account_id": str(account_id or ""),
+            "event": str(event or "")[:80],
+            "detail": detail or {},
+        }
+        append_jsonl_file(PJE_ACCOUNT_EVENTS_PATH, record)
+
+    @staticmethod
+    def _normalize_pje_trt(value: Any) -> str:
+        digits = only_digits(value)
+        if not digits:
+            raw = str(value or "").upper().strip()
+            match = re.search(r"TRT\s*([0-9]{1,2})", raw)
+            digits = match.group(1) if match else "2"
+        number = int(digits)
+        if number < 1 or number > 24:
+            raise ValueError("TRT PJe inválido")
+        return f"TRT{number}"
+
+    @staticmethod
+    def _normalize_pje_oab(value: Any) -> str:
+        raw = re.sub(r"\s+", "", str(value or "").upper())
+        raw = re.sub(r"[^A-Z0-9/-]+", "", raw)[:32]
+        if not raw or not re.search(r"\d", raw):
+            raise ValueError("informe a OAB")
+        return raw
+
+    @staticmethod
+    def _normalize_pje_oab_uf(value: Any) -> str:
+        raw = re.sub(r"[^A-Za-z]+", "", str(value or "").upper())[:2]
+        return raw if len(raw) == 2 else ""
+
+    @staticmethod
+    def _reject_pje_credential_payload(payload: dict[str, Any]) -> None:
+        forbidden_fragments = {
+            "password",
+            "senha",
+            "passphrase",
+            "secret",
+            "segredo",
+            "certificate",
+            "certificado",
+            "private_key",
+            "chave_privada",
+            "token_pje",
+        }
+        lowered = {str(key or "").lower() for key in payload.keys()}
+        if any(any(fragment in key for fragment in forbidden_fragments) for key in lowered):
+            raise ValueError("não envie senha, certificado, chave privada ou token PJe para a Justra")
+
+    @staticmethod
+    def _pje_account_id(user_id: str, office_id: str, trt: str, oab: str, uf: str = "") -> str:
+        digest = hashlib.sha1(f"{user_id}:{office_id}:{trt}:{oab}:{uf}".encode("utf-8")).hexdigest()[:16]
+        return f"pjeacct-{digest}"
+
+    @staticmethod
+    def _pje_account_public(account: dict[str, Any]) -> dict[str, Any]:
+        public = copy.deepcopy(account)
+        public.pop("credential", None)
+        public.pop("credentials", None)
+        public.pop("password", None)
+        public.pop("certificate", None)
+        return public
+
+    def _pje_account_for_user(self, user: dict[str, Any], account_id: str) -> dict[str, Any]:
+        account_id = str(account_id or "").strip()
+        with self.pje_accounts_lock:
+            account = self.pje_accounts.get("accounts", {}).get(account_id)
+            if not isinstance(account, dict):
+                raise ValueError("conta PJe não encontrada")
+            if user.get("role") != "admin" and str(account.get("user_id") or "") != str(user.get("id") or ""):
+                raise ValueError("conta PJe não encontrada")
+            return self._pje_account_public(account)
+
+    def list_pje_accounts(self, user: dict[str, Any]) -> dict[str, Any]:
+        user_id = str(user.get("id") or "")
+        with self.pje_accounts_lock:
+            accounts = [
+                self._pje_account_public(account)
+                for account in (self.pje_accounts.get("accounts") or {}).values()
+                if isinstance(account, dict)
+                and (user.get("role") == "admin" or str(account.get("user_id") or "") == user_id)
+            ]
+        accounts.sort(key=lambda item: (str(item.get("trt") or ""), str(item.get("oab") or ""), str(item.get("created_at") or "")))
+        return {"ok": True, "accounts": accounts, "generated_at": now_iso()}
+
+    def upsert_pje_account(self, user: dict[str, Any], payload: dict[str, Any]) -> dict[str, Any]:
+        if not isinstance(payload, dict):
+            raise ValueError("payload inválido")
+        self._reject_pje_credential_payload(payload)
+        user_id = str(user.get("id") or "")
+        office_id = re.sub(r"[^A-Za-z0-9_.@-]+", "-", str(payload.get("office_id") or user.get("office_id") or user_id)).strip("-")[:80] or user_id
+        trt = self._normalize_pje_trt(payload.get("trt") or "TRT2")
+        oab = self._normalize_pje_oab(payload.get("oab"))
+        uf = self._normalize_pje_oab_uf(payload.get("uf"))
+        account_id = self._pje_account_id(user_id, office_id, trt, oab, uf)
+        now_text = now_iso()
+        with self.pje_accounts_lock:
+            accounts = self.pje_accounts.setdefault("accounts", {})
+            existing = accounts.get(account_id) if isinstance(accounts.get(account_id), dict) else {}
+            account = {
+                **existing,
+                "id": account_id,
+                "user_id": user_id,
+                "office_id": office_id,
+                "trt": trt,
+                "oab": oab,
+                "uf": uf,
+                "session_status": str(existing.get("session_status") or "login_required"),
+                "session_dir": str(existing.get("session_dir") or f"pje_sessions/{account_id}"),
+                "login_url": self._pje_account_login_url(trt),
+                "last_login_at": str(existing.get("last_login_at") or ""),
+                "last_sync_at": str(existing.get("last_sync_at") or ""),
+                "last_error": "",
+                "created_at": str(existing.get("created_at") or now_text),
+                "updated_at": now_text,
+            }
+            accounts[account_id] = account
+            self.pje_accounts.setdefault("worker", {})["last_upsert_at"] = now_text
+            self._save_pje_accounts()
+        self._append_pje_account_event(account_id, "upserted", {"user_id": user_id, "trt": trt, "oab": oab, "uf": uf})
+        job = self.enqueue_pje_account_job(account, PJE_JOB_TYPE_LOGIN_SESSION, reason="pje_account_login", priority=85, force=True)
+        self._set_pje_account_job_state(account_id, job, "login_queued")
+        return {"ok": True, "account": self._pje_account_for_user(user, account_id), "job": job, **self.list_pje_accounts(user)}
+
+    def _set_pje_account_job_state(self, account_id: str, job: dict[str, Any], session_status: str) -> None:
+        with self.pje_accounts_lock:
+            account = self.pje_accounts.setdefault("accounts", {}).get(account_id)
+            if not isinstance(account, dict):
+                return
+            account["current_job_id"] = str(job.get("id") or "")
+            account["current_job_type"] = str(job.get("job_type") or "")
+            account["session_status"] = session_status
+            account["last_error"] = ""
+            account["updated_at"] = now_iso()
+            self._save_pje_accounts()
+
+    def enqueue_pje_account_job(
+        self,
+        account: dict[str, Any],
+        job_type: str,
+        *,
+        reason: str,
+        priority: int = 50,
+        process_number: str = "",
+        force: bool = False,
+    ) -> dict[str, Any]:
+        if job_type not in PJE_ACCOUNT_JOB_TYPES:
+            raise ValueError("tipo de job PJe autenticado inválido")
+        account_id = str(account.get("id") or "")
+        if not account_id:
+            raise ValueError("conta PJe inválida")
+        compact = compact_process_number(process_number)
+        if job_type == PJE_JOB_TYPE_AUTH_COLLECT and not compact:
+            raise ValueError("processo obrigatório para coleta PJe autenticada")
+        job_id = self._pje_account_job_id(account_id, job_type, compact)
+        if not job_id:
+            raise ValueError("job PJe inválido")
+        now_text = now_iso()
+        max_attempts = 1 if job_type == PJE_JOB_TYPE_LOGIN_SESSION else PJE_JOB_MAX_ATTEMPTS
+        with self.pje_jobs_lock:
+            jobs = self.pje_jobs.setdefault("jobs", {})
+            existing = jobs.get(job_id) if isinstance(jobs.get(job_id), dict) else {}
+            status = str(existing.get("status") or "")
+            should_reset = force or status not in PJE_JOB_ACTIVE_STATUS
+            job = {
+                **existing,
+                "id": job_id,
+                "job_type": job_type,
+                "account_id": account_id,
+                "user_id": str(account.get("user_id") or ""),
+                "office_id": str(account.get("office_id") or ""),
+                "access_scope": "authenticated_account",
+                "process_number": format_process_number(compact) if compact else "",
+                "process_number_digits": compact,
+                "degree": str(existing.get("degree") or "1"),
+                "tribunal": str(account.get("trt") or "TRT2"),
+                "trt": str(account.get("trt") or "TRT2"),
+                "oab": str(account.get("oab") or ""),
+                "uf": str(account.get("uf") or ""),
+                "session_dir": str(account.get("session_dir") or f"pje_sessions/{account_id}"),
+                "page_url": self._official_pje_url_for_process(compact) if compact else str(account.get("login_url") or ""),
+                "status": "queued" if should_reset else status,
+                "reason": str(reason or existing.get("reason") or "pje_account")[:80],
+                "priority": max(int(existing.get("priority") or 0), int(priority or 0)),
+                "attempts": 0 if should_reset else int(existing.get("attempts") or 0),
+                "max_attempts": int(existing.get("max_attempts") or max_attempts),
+                "waiting_user_until": "",
+                "waiting_user_ids": [str(account.get("user_id") or "")] if account.get("user_id") else [],
+                "case_ids": [],
+                "next_run_at": "" if should_reset else str(existing.get("next_run_at") or ""),
+                "locked_by": "" if should_reset else str(existing.get("locked_by") or ""),
+                "locked_at": "" if should_reset else str(existing.get("locked_at") or ""),
+                "last_error": "" if should_reset else str(existing.get("last_error") or ""),
+                "last_import_id": str(existing.get("last_import_id") or ""),
+                "last_capture_at": str(existing.get("last_capture_at") or ""),
+                "created_at": str(existing.get("created_at") or now_text),
+                "updated_at": now_text,
+            }
+            jobs[job_id] = job
+            self._save_pje_jobs()
+        self._append_pje_job_event(job_id, "queued", {"reason": reason, "priority": priority, "account_id": account_id, "job_type": job_type})
+        return self._pje_job_public(copy.deepcopy(job))
+
+    def request_pje_account_login(self, user: dict[str, Any], payload: dict[str, Any]) -> dict[str, Any]:
+        account = self._pje_account_for_user(user, str(payload.get("account_id") or ""))
+        job = self.enqueue_pje_account_job(account, PJE_JOB_TYPE_LOGIN_SESSION, reason="pje_account_reconnect", priority=90, force=True)
+        self._set_pje_account_job_state(str(account.get("id") or ""), job, "login_queued")
+        return {"ok": True, "account": self._pje_account_for_user(user, str(account.get("id") or "")), "job": job, **self.list_pje_accounts(user)}
+
+    def request_pje_account_sync(self, user: dict[str, Any], payload: dict[str, Any]) -> dict[str, Any]:
+        account = self._pje_account_for_user(user, str(payload.get("account_id") or ""))
+        account_id = str(account.get("id") or "")
+        ready = str(account.get("session_status") or "") == "ready"
+        job_type = PJE_JOB_TYPE_SYNC_ACCOUNT if ready else PJE_JOB_TYPE_LOGIN_SESSION
+        reason = "pje_account_sync" if ready else "pje_account_login_before_sync"
+        job = self.enqueue_pje_account_job(account, job_type, reason=reason, priority=80, force=True)
+        self._set_pje_account_job_state(account_id, job, "sync_queued" if ready else "login_queued")
+        return {"ok": True, "account": self._pje_account_for_user(user, account_id), "job": job, **self.list_pje_accounts(user)}
+
+    def _update_pje_account_after_job(self, job: dict[str, Any], ok: bool, error: str, result: dict[str, Any]) -> None:
+        account_id = str(job.get("account_id") or "")
+        job_type = str(job.get("job_type") or "")
+        if not account_id or job_type not in PJE_ACCOUNT_JOB_TYPES:
+            return
+        now_text = now_iso()
+        failure_kind = str(result.get("failure_kind") or "")
+        with self.pje_accounts_lock:
+            account = self.pje_accounts.setdefault("accounts", {}).get(account_id)
+            if not isinstance(account, dict):
+                return
+            if ok:
+                if job_type == PJE_JOB_TYPE_LOGIN_SESSION:
+                    account["session_status"] = str(result.get("session_status") or "ready")
+                    account["last_login_at"] = now_text
+                elif job_type in {PJE_JOB_TYPE_SYNC_ACCOUNT, PJE_JOB_TYPE_AUTH_COLLECT}:
+                    account["session_status"] = "ready"
+                    account["last_sync_at"] = now_text
+                account["last_error"] = ""
+                account["current_job_id"] = ""
+                account["current_job_type"] = ""
+            else:
+                if failure_kind == "manual_required":
+                    account["session_status"] = "manual_bridge_required" if job_type == PJE_JOB_TYPE_LOGIN_SESSION else "login_required"
+                else:
+                    account["session_status"] = "error"
+                account["last_error"] = error or "falha no job PJe autenticado"
+                account["current_job_id"] = str(job.get("id") or "")
+                account["current_job_type"] = job_type
+            account["updated_at"] = now_text
+            self.pje_accounts.setdefault("worker", {})["last_job_update_at"] = now_text
+            self._save_pje_accounts()
+        self._append_pje_account_event(account_id, "job_finished", {"job_id": job.get("id"), "job_type": job_type, "ok": ok, "error": error, "result": result})
 
     def _pje_active_job_counts_locked(self) -> Counter:
         jobs = self.pje_jobs.get("jobs") or {}
@@ -3423,6 +3722,8 @@ class JustraApp:
             job = {
                 **existing,
                 "id": job_id,
+                "job_type": str(existing.get("job_type") or PJE_JOB_TYPE_PUBLIC_COLLECT),
+                "access_scope": str(existing.get("access_scope") or "public_process"),
                 "process_number": format_process_number(compact),
                 "process_number_digits": compact,
                 "degree": str(existing.get("degree") or "1"),
@@ -3470,10 +3771,18 @@ class JustraApp:
 
     def _pje_job_public(self, job: dict[str, Any]) -> dict[str, Any]:
         process_number = compact_process_number(job.get("process_number") or job.get("process_number_digits"))
-        counts = self._pje_case_counts_for_process(process_number)
+        counts = self._pje_case_counts_for_process(process_number) if process_number else {
+            "case_ids": [],
+            "owner_ids": [],
+            "case_count": 0,
+            "owner_count": 0,
+            "title": "",
+            "latest_capture_at": "",
+            "captured_document_count": 0,
+        }
         return {
             **copy.deepcopy(job),
-            "process_number": format_process_number(process_number),
+            "process_number": format_process_number(process_number) if process_number else "",
             "process_number_digits": process_number,
             "case_count": counts["case_count"],
             "owner_count": counts["owner_count"],
@@ -3495,6 +3804,7 @@ class JustraApp:
             self._unlock_stale_pje_jobs_locked()
             jobs = [self._pje_job_public(job) for job in (self.pje_jobs.get("jobs") or {}).values() if isinstance(job, dict)]
             status_counts = Counter(str(job.get("status") or "unknown") for job in jobs)
+            type_counts = Counter(str(job.get("job_type") or PJE_JOB_TYPE_PUBLIC_COLLECT) for job in jobs)
             worker = copy.deepcopy(self.pje_jobs.get("worker") or {})
         jobs.sort(key=self._pje_job_sort_key)
         active = [job for job in jobs if str(job.get("status") or "") in PJE_JOB_ACTIVE_STATUS]
@@ -3516,6 +3826,7 @@ class JustraApp:
             },
             "jobs": jobs[:200],
             "status_counts": dict(status_counts),
+            "type_counts": dict(type_counts),
             "worker": worker,
             "operator": {
                 "token_configured": bool(os.getenv("JUSTRA_PJE_OPERATOR_TOKEN", "").strip()),
@@ -3531,8 +3842,13 @@ class JustraApp:
             if not isinstance(job, dict):
                 raise ValueError("job PJe não encontrado")
             public = self._pje_job_public(job)
-        if user.get("role") != "admin" and not self._pje_job_user_has_process(user["id"], public.get("process_number_digits") or ""):
-            raise ValueError("job PJe não encontrado")
+        if user.get("role") != "admin":
+            if public.get("account_id"):
+                account_user_id = str(public.get("user_id") or "")
+                if account_user_id != str(user.get("id") or ""):
+                    raise ValueError("job PJe não encontrado")
+            elif not self._pje_job_user_has_process(user["id"], public.get("process_number_digits") or ""):
+                raise ValueError("job PJe não encontrado")
         return {"ok": True, "job": public}
 
     def admin_pje_job_action(self, admin: dict[str, Any], payload: dict[str, Any]) -> dict[str, Any]:
@@ -3611,11 +3927,13 @@ class JustraApp:
         ok = bool(payload.get("ok"))
         error = str(payload.get("error") or "")[:500]
         result = payload.get("result") if isinstance(payload.get("result"), dict) else {}
+        account_job_snapshot: dict[str, Any] | None = None
         with self.pje_jobs_lock:
             jobs = self.pje_jobs.setdefault("jobs", {})
             job = jobs.get(job_id)
             if not isinstance(job, dict):
                 raise ValueError("job PJe não encontrado")
+            account_job_snapshot = copy.deepcopy(job) if job.get("account_id") else None
             if ok:
                 if str(job.get("status") or "") != "succeeded":
                     job["status"] = "succeeded"
@@ -3630,6 +3948,9 @@ class JustraApp:
                 if failure_kind == PJE_JOB_ORIGIN_BLOCKED_STATUS or "PJe bloqueou a origem/IP" in job["last_error"]:
                     job["status"] = PJE_JOB_ORIGIN_BLOCKED_STATUS
                     job["next_run_at"] = ""
+                elif failure_kind == "manual_required":
+                    job["status"] = "manual_required"
+                    job["next_run_at"] = ""
                 elif attempts < max_attempts:
                     job["status"] = "retry_wait"
                     job["next_run_at"] = (datetime.now() + timedelta(minutes=PJE_OPERATOR_RETRY_MINUTES)).isoformat(timespec="seconds")
@@ -3641,6 +3962,10 @@ class JustraApp:
             job["updated_at"] = now_iso()
             self._save_pje_jobs()
             public = self._pje_job_public(job)
+            if account_job_snapshot is not None:
+                account_job_snapshot.update(copy.deepcopy(job))
+        if account_job_snapshot is not None:
+            self._update_pje_account_after_job(account_job_snapshot, ok, error, result)
         self._append_pje_job_event(job_id, "finished" if ok else "failed", {"ok": ok, "error": error, "result": result})
         return {"ok": True, "job": public}
 
@@ -10665,6 +10990,9 @@ def make_handler(app: JustraApp):
                 if path == "/api/updates":
                     self._send_json(app.updates_dashboard(user, query))
                     return
+                if path == "/api/pje/accounts":
+                    self._send_json(app.list_pje_accounts(user))
+                    return
                 pje_job_match = re.fullmatch(r"/api/pje/jobs/([^/]+)", path)
                 if pje_job_match:
                     self._send_json(app.pje_job_status_for_user(user, unquote(pje_job_match.group(1))))
@@ -10887,6 +11215,15 @@ def make_handler(app: JustraApp):
                 if parsed.path == "/api/updates/datajud/lawyer":
                     result = app.datajud_lawyer_watch(user["id"], payload)
                     self._send_json({**result, "dashboard": app.updates_dashboard(user, {})})
+                    return
+                if parsed.path == "/api/pje/accounts":
+                    self._send_json(app.upsert_pje_account(user, payload))
+                    return
+                if parsed.path == "/api/pje/accounts/login":
+                    self._send_json(app.request_pje_account_login(user, payload))
+                    return
+                if parsed.path == "/api/pje/accounts/sync":
+                    self._send_json(app.request_pje_account_sync(user, payload))
                     return
                 if parsed.path == "/api/radar/monitors/action":
                     self._send_json(

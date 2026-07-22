@@ -19,6 +19,7 @@ const state = {
   djen: null,
   pjeOperator: null,
   pjeExtension: null,
+  pjeAccounts: null,
   deadlines: null,
   updates: null,
   processCenter: null,
@@ -1752,7 +1753,20 @@ function pjeJobReasonLabel(reason) {
     user_recollect: "Recoleta solicitada",
     scheduled_refresh: "Monitoramento",
     retry: "Retry",
+    pje_account_login: "Conectar conta",
+    pje_account_reconnect: "Reconectar conta",
+    pje_account_sync: "Sincronizar conta",
+    pje_account_login_before_sync: "Login antes do sync",
   }[reason] || reason || "—";
+}
+
+function pjeJobTypeLabel(type) {
+  return {
+    pje_collect_public_process: "PJe público",
+    pje_login_session: "Login PJe",
+    pje_sync_account_processes: "Sync conta",
+    pje_collect_authenticated_process: "PJe autenticado",
+  }[type] || type || "PJe público";
 }
 
 function pjeJobActionButtons(job = {}) {
@@ -1809,10 +1823,14 @@ function renderPjeOperator(data) {
         const waiting = job.waiting_user_until ? `<br><span class="muted">SLA usuário: ${escapeHtml(fmtMoment(job.waiting_user_until))}</span>` : "";
         const title = job.case_title ? `<br><span class="muted">${escapeHtml(short(job.case_title, 80))}</span>` : "";
         const locked = job.locked_by ? `<br><span class="muted">${escapeHtml(job.locked_by)} · ${escapeHtml(fmtMoment(job.locked_at))}</span>` : "";
+        const account = job.account_id
+          ? `<strong>${escapeHtml(pjeJobTypeLabel(job.job_type))}</strong><br><span class="muted">${escapeHtml(job.trt || job.tribunal || "—")} · OAB ${escapeHtml(job.oab || "—")}</span>`
+          : "";
+        const processSubject = account || `<strong>${escapeHtml(job.process_number || job.process_number_digits || "—")}</strong>${title}<br><span class="muted">${escapeHtml(job.tribunal || "—")} · ${fmt(job.case_count)} caso(s)</span>`;
         return `<tr>
           <td><strong>${fmt(job.priority)}</strong>${waiting}</td>
-          <td><strong>${escapeHtml(job.process_number || job.process_number_digits || "—")}</strong>${title}<br><span class="muted">${escapeHtml(job.tribunal || "—")} · ${fmt(job.case_count)} caso(s)</span></td>
-          <td>${escapeHtml(pjeJobReasonLabel(job.reason))}<br><span class="muted">${escapeHtml(short(job.page_url || "", 64))}</span></td>
+          <td>${processSubject}</td>
+          <td>${escapeHtml(pjeJobReasonLabel(job.reason))}<br><span class="muted">${escapeHtml(pjeJobTypeLabel(job.job_type))}${job.page_url ? ` · ${escapeHtml(short(job.page_url || "", 64))}` : ""}</span></td>
           <td>${statusBadge(pjeJobStatusLabel(job.status))}${locked}</td>
           <td>${fmt(job.attempts)} / ${fmt(job.max_attempts)}</td>
           <td>${escapeHtml(short(job.last_error || "—", 110))}</td>
@@ -2839,6 +2857,79 @@ function renderProcessCenterError(err) {
   if ($("#processCenterNewCaseRows")) $("#processCenterNewCaseRows").innerHTML = `<tr><td colspan="5" class="muted">Falha ao carregar novos casos.</td></tr>`;
 }
 
+function pjeAccountStatusLabel(status) {
+  return {
+    login_required: "Reconectar PJe",
+    login_queued: "Login na fila",
+    sync_queued: "Sync na fila",
+    ready: "Sessão ativa",
+    manual_bridge_required: "Ponte interativa pendente",
+    error: "Erro",
+  }[status] || status || "Sem sessão";
+}
+
+function renderPjeAccounts(data = state.pjeAccounts || {}) {
+  state.pjeAccounts = data;
+  const accounts = data.accounts || [];
+  if ($("#pjeAccountMeta")) {
+    $("#pjeAccountMeta").textContent = `${fmt(accounts.length)} conexão(ões) · atualizado ${fmtMoment(data.generated_at)}`;
+  }
+  if (!$("#pjeAccountRows")) return;
+  $("#pjeAccountRows").innerHTML = accounts.length
+    ? accounts.map((account) => {
+        const id = escapeHtml(account.id || "");
+        const lastLogin = account.last_login_at ? `Login ${fmtMoment(account.last_login_at)}` : "Sem login";
+        const lastSync = account.last_sync_at ? `Sync ${fmtMoment(account.last_sync_at)}` : "Sem sync";
+        const error = account.last_error ? `<br><span class="muted">${escapeHtml(short(account.last_error, 120))}</span>` : "";
+        return `<article class="pje-account-item">
+          <div>
+            <strong>${escapeHtml(account.trt || "TRT")} · OAB ${escapeHtml(account.oab || "—")}${account.uf ? `/${escapeHtml(account.uf)}` : ""}</strong>
+            <span>${escapeHtml(lastLogin)} · ${escapeHtml(lastSync)}${error}</span>
+          </div>
+          <div>
+            ${statusBadge(pjeAccountStatusLabel(account.session_status))}
+            <button type="button" data-pje-account-login="${id}">Reconectar</button>
+            <button type="button" data-pje-account-sync="${id}">Sincronizar</button>
+          </div>
+        </article>`;
+      }).join("")
+    : `<div class="empty-state">Nenhuma conexão PJe cadastrada.</div>`;
+}
+
+async function loadPjeAccounts() {
+  const data = await api("/api/pje/accounts");
+  renderPjeAccounts(data);
+  return data;
+}
+
+async function createPjeAccount() {
+  const trt = $("#pjeAccountTrt")?.value || "TRT2";
+  const oab = ($("#pjeAccountOab")?.value || "").trim();
+  const uf = ($("#pjeAccountUf")?.value || "").trim().toUpperCase();
+  if (!oab) {
+    $("#pjeAccountStatus").textContent = "Informe a OAB.";
+    return;
+  }
+  $("#pjeAccountStatus").textContent = "Criando conexão PJe e enfileirando login assistido...";
+  const data = await api("/api/pje/accounts", {
+    method: "POST",
+    body: JSON.stringify({ trt, oab, uf }),
+  });
+  renderPjeAccounts(data);
+  $("#pjeAccountStatus").textContent = "Conexão PJe criada. A fila do operador recebeu o job de login.";
+}
+
+async function runPjeAccountAction(accountId, action) {
+  const path = action === "sync" ? "/api/pje/accounts/sync" : "/api/pje/accounts/login";
+  $("#pjeAccountStatus").textContent = action === "sync" ? "Sincronização PJe enfileirada..." : "Reconexão PJe enfileirada...";
+  const data = await api(path, {
+    method: "POST",
+    body: JSON.stringify({ account_id: accountId }),
+  });
+  renderPjeAccounts(data);
+  $("#pjeAccountStatus").textContent = action === "sync" ? "Job de sincronização enviado para a fila." : "Job de login enviado para a fila.";
+}
+
 function renderPjeExtensionInstall(config = state.pjeExtension || {}) {
   const button = $("#installPjeExtension");
   if (!button) return;
@@ -2863,6 +2954,9 @@ async function loadPjeExtensionInstall() {
 async function loadProcessCenter(options = {}) {
   if ($("#processCenterStatus")) $("#processCenterStatus").textContent = options.refreshDatajud ? "Atualizando DataJud e montando a central..." : "Carregando processos...";
   loadPjeExtensionInstall().catch(() => {});
+  loadPjeAccounts().catch((err) => {
+    if ($("#pjeAccountMeta")) $("#pjeAccountMeta").textContent = `Erro: ${err.message}`;
+  });
   const casesData = await api("/api/cases?q=");
   state.cases = casesData.cases || [];
   state.deadlines = {};
@@ -4505,6 +4599,27 @@ function bindEvents() {
   $("#processCenterAddForm")?.addEventListener("submit", (event) => {
     event.preventDefault();
     addProcessCenterProcess().catch((err) => { $("#processCenterStatus").textContent = `Erro: ${err.message}`; });
+  });
+  $("#pjeAccountForm")?.addEventListener("submit", (event) => {
+    event.preventDefault();
+    createPjeAccount().catch((err) => { $("#pjeAccountStatus").textContent = `Erro: ${err.message}`; });
+  });
+  $("#pjeAccountRows")?.addEventListener("click", (event) => {
+    const loginButton = event.target.closest("[data-pje-account-login]");
+    if (loginButton) {
+      loginButton.disabled = true;
+      runPjeAccountAction(loginButton.dataset.pjeAccountLogin, "login")
+        .catch((err) => { $("#pjeAccountStatus").textContent = `Erro: ${err.message}`; })
+        .finally(() => { loginButton.disabled = false; });
+      return;
+    }
+    const syncButton = event.target.closest("[data-pje-account-sync]");
+    if (syncButton) {
+      syncButton.disabled = true;
+      runPjeAccountAction(syncButton.dataset.pjeAccountSync, "sync")
+        .catch((err) => { $("#pjeAccountStatus").textContent = `Erro: ${err.message}`; })
+        .finally(() => { syncButton.disabled = false; });
+    }
   });
   $("#processCenterRows")?.addEventListener("click", (event) => {
     const deleteButton = event.target.closest("[data-center-delete-case]");

@@ -243,6 +243,36 @@
           <p id="processCenterStatus" class="muted">Ao adicionar, abrimos o PJe para você resolver o CAPTCHA e a extensão enviar documentos/movimentos; DJEN e DataJud seguem em paralelo.</p>
         </section>
 
+        <section class="panel pje-account-panel">
+          <div class="section-head">
+            <div><h2>Conexões PJe</h2><span id="pjeAccountMeta" class="muted">Carregando...</span></div>
+          </div>
+          <form id="pjeAccountForm" class="pje-account-form">
+            <label>
+              <span>TRT</span>
+              <select id="pjeAccountTrt">
+                <option value="TRT2">TRT2</option>
+                <option value="TRT1">TRT1</option>
+                <option value="TRT3">TRT3</option>
+                <option value="TRT4">TRT4</option>
+                <option value="TRT6">TRT6</option>
+                <option value="TRT7">TRT7</option>
+              </select>
+            </label>
+            <label>
+              <span>OAB</span>
+              <input id="pjeAccountOab" placeholder="123456">
+            </label>
+            <label>
+              <span>UF</span>
+              <input id="pjeAccountUf" placeholder="SP" maxlength="2">
+            </label>
+            <button type="submit">Conectar PJe</button>
+          </form>
+          <div id="pjeAccountRows" class="pje-account-list"></div>
+          <p id="pjeAccountStatus" class="muted">Sessões PJe usam login assistido, sem armazenar senha ou certificado.</p>
+        </section>
+
         <section class="panel">
           <div class="section-head">
             <div><h2>Processos acompanhados</h2><span id="processCenterMeta" class="muted">Carregando...</span></div>
