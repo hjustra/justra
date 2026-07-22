@@ -22,7 +22,7 @@ O usuario final nao participa deste fluxo. A conta gov.br ouro, se for necessari
 9. A Azure pausa `justra.service`, importa no DuckDB com `--append --skip-backup` e religa o servico.
 10. A busca juridica passa a ler os documentos importados.
 
-O mesmo `output_tag` permite checkpoint. Se a coleta diaria ficar parcial, as proximas janelas retomam de onde parou. O worker sempre prioriza o dia incompleto mais antigo dentro do plano antes de abrir um novo D-1, evitando acumular backlog invisivel. A politica inicial usa `FALCAO_REQUEST_BUDGET=1000` por disparo e `5-15s` entre requests; depois de observarmos estabilidade, esse limite pode subir.
+O mesmo `output_tag` permite checkpoint. Se a coleta diaria ficar parcial, as proximas janelas retomam de onde parou. O worker sempre prioriza o dia incompleto mais antigo dentro do plano antes de abrir um novo D-1, evitando acumular backlog invisivel. A politica inicial mira aproximadamente `10k-11k` documentos por dia, usando `FALCAO_REQUEST_BUDGET=320` por disparo e `25-55s` entre requests. O cooldown de `6h` apos `HTTP 429` evita insistir em janela bloqueada sem cancelar o dia inteiro.
 
 ## Arquivos principais
 
@@ -72,10 +72,10 @@ FALCAO_AZURE_DATA_DIR=/mnt/justra-data
 FALCAO_AZURE_SERVICE=justra
 
 FALCAO_COLLECTIONS=acordaos,sentencas,decisoesmonocraticas,recursorevista,precedentes
-FALCAO_MIN_DELAY_MS=5000
-FALCAO_MAX_DELAY_MS=15000
-FALCAO_REQUEST_BUDGET=1000
-FALCAO_BLOCK_FREE_MINUTES=1440
+FALCAO_MIN_DELAY_MS=25000
+FALCAO_MAX_DELAY_MS=55000
+FALCAO_REQUEST_BUDGET=320
+FALCAO_BLOCK_FREE_MINUTES=360
 FALCAO_PLAN_DAYS=90
 ```
 
