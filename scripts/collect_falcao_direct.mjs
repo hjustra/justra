@@ -19,7 +19,10 @@ const { chromium } = require("playwright");
 const FRONTEND_URL =
   "https://jurisprudencia.jt.jus.br/jurisprudencia-nacional/pesquisa";
 const API_ORIGIN = "https://jurisprudencia.jt.jus.br";
-const API_PATH = "/jurisprudencia-nacional-backend/api/no-auth/pesquisa";
+const API_PATHS = {
+  "no-auth": "/jurisprudencia-nacional-backend/api/no-auth/pesquisa",
+  frontend: "/jurisprudencia-nacional-backend/api/frontend/pesquisa",
+};
 const CITATION_BASE =
   "https://jurisprudencia.jt.jus.br/jurisprudencia-nacional/citacao";
 const DEFAULT_CHROME_PATH =
@@ -168,6 +171,8 @@ function parseArgs(argv) {
     userDataDir: process.env.FALCAO_USER_DATA_DIR || "",
     authSetup: false,
     authWaitMinutes: 15,
+    apiMode: process.env.FALCAO_API_MODE || "no-auth",
+    apiPath: process.env.FALCAO_API_PATH || "",
     validateOnly: false,
     mode: "d-1",
   };
@@ -199,6 +204,8 @@ function parseArgs(argv) {
       args.collections = argv[++index].split(",").filter(Boolean);
     } else if (value === "--headed") args.headed = true;
     else if (value === "--headless") args.headed = false;
+    else if (value === "--api-mode") args.apiMode = argv[++index];
+    else if (value === "--api-path") args.apiPath = argv[++index];
     else if (value === "--validate-only") args.validateOnly = true;
     else if (value === "--mode") args.mode = argv[++index];
     // Compatibilidade com o wrapper antigo. O motor direto não usa estes controles.
@@ -245,6 +252,13 @@ function parseArgs(argv) {
   if (args.authSetup && args.connectCdp) {
     throw new Error("--auth-setup não deve ser usado junto com --connect-cdp.");
   }
+  if (!Object.prototype.hasOwnProperty.call(API_PATHS, args.apiMode)) {
+    throw new Error("--api-mode deve ser no-auth ou frontend.");
+  }
+  if (args.apiPath && !args.apiPath.startsWith("/jurisprudencia-nacional-backend/api/")) {
+    throw new Error("--api-path deve apontar para a API interna do Falcão.");
+  }
+  args.apiPath = args.apiPath || API_PATHS[args.apiMode];
   const known = new Set(COLLECTIONS.map((item) => item.id));
   for (const collection of args.collections) {
     if (!known.has(collection)) throw new Error(`Coleção desconhecida: ${collection}`);
@@ -363,6 +377,68 @@ class HttpResponseError extends Error {
 class RequestBudgetReached extends Error {}
 class PausedError extends Error {}
 
+function pickTokenCandidate(value) {
+  if (!value) return "";
+  const text = String(value);
+  if (text.startsWith("Bearer ")) return text.slice("Bearer ".length).trim();
+  const jwt = text.match(/eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+/);
+  return jwt ? jwt[0] : "";
+}
+
+async function authHeadersFromPage(page) {
+  const token = await page.evaluate(() => {
+    function candidate(value) {
+      if (!value) return "";
+      const text = String(value);
+      if (text.startsWith("Bearer ")) return text.slice("Bearer ".length).trim();
+      const jwt = text.match(/eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+/);
+      return jwt ? jwt[0] : "";
+    }
+
+    function fromParsed(value, depth = 0) {
+      if (depth > 6 || value == null) return "";
+      if (typeof value === "string") return candidate(value);
+      if (typeof value !== "object") return "";
+
+      const preferredKeys = [
+        "access_token",
+        "accessToken",
+        "token",
+        "id_token",
+        "idToken",
+      ];
+      for (const key of preferredKeys) {
+        const found = fromParsed(value[key], depth + 1);
+        if (found) return found;
+      }
+      for (const nested of Object.values(value)) {
+        const found = fromParsed(nested, depth + 1);
+        if (found) return found;
+      }
+      return "";
+    }
+
+    const stores = [window.localStorage, window.sessionStorage];
+    for (const store of stores) {
+      for (let index = 0; index < store.length; index += 1) {
+        const key = store.key(index);
+        const raw = key ? store.getItem(key) : "";
+        if (!raw) continue;
+        try {
+          const parsed = JSON.parse(raw);
+          const nested = fromParsed(parsed);
+          if (nested) return nested;
+        } catch {
+          const direct = candidate(raw);
+          if (direct) return direct;
+        }
+      }
+    }
+    return "";
+  });
+  return token ? { Authorization: `Bearer ${pickTokenCandidate(token)}` } : {};
+}
+
 async function main() {
   const args = parseArgs(process.argv.slice(2));
   if (args.validateOnly) {
@@ -419,6 +495,8 @@ async function main() {
     request_elapsed_total_ms: 0,
     status_counts: {},
     block_events: 0,
+    api_mode: args.apiMode,
+    api_path: args.apiPath,
     completed_windows: Object.keys(checkpoint.completed_partitions).length,
     coverage_gaps: checkpoint.gaps.length,
     complete: false,
@@ -509,7 +587,7 @@ async function main() {
       params.set("page", String(pageNumber));
       params.set("size", String(args.pageSize));
     }
-    return `${API_ORIGIN}${API_PATH}${filtersOnly ? "/filtros" : ""}?${params}`;
+    return `${API_ORIGIN}${args.apiPath}${filtersOnly ? "/filtros" : ""}?${params}`;
   }
 
   function logRequest(response, context) {
@@ -557,11 +635,12 @@ async function main() {
   }
 
   let page;
+  let authHeaders = {};
   async function apiGet(url, context) {
     for (let attempt = 0; ; attempt += 1) {
       await pace();
       const sampledDelay = nextSampledDelayMs;
-      const response = await page.evaluate(async ({ target, timeoutMs }) => {
+      const response = await page.evaluate(async ({ target, timeoutMs, headers }) => {
         const started = Date.now();
         const controller = new AbortController();
         const timer = setTimeout(() => controller.abort(), timeoutMs);
@@ -569,7 +648,7 @@ async function main() {
           const result = await fetch(target, {
             method: "GET",
             credentials: "include",
-            headers: { Accept: "application/json, text/plain, */*" },
+            headers: { Accept: "application/json, text/plain, */*", ...headers },
             signal: controller.signal,
           });
           const body = await result.text();
@@ -583,7 +662,7 @@ async function main() {
         } finally {
           clearTimeout(timer);
         }
-      }, { target: url, timeoutMs: REQUEST_TIMEOUT_MS });
+      }, { target: url, timeoutMs: REQUEST_TIMEOUT_MS, headers: authHeaders });
       response.url = url;
       response.response_bytes = Buffer.byteLength(response.body || "");
       response.sampled_delay_ms = sampledDelay;
@@ -914,6 +993,11 @@ async function main() {
       state.result = "auth_setup_complete";
       saveState();
       return;
+    }
+    if (args.apiMode === "frontend") {
+      authHeaders = await authHeadersFromPage(page);
+      state.auth_header_available = Boolean(authHeaders.Authorization);
+      saveState();
     }
 
     let allComplete = true;

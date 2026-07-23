@@ -166,6 +166,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--mode", default=os.getenv("FALCAO_MODE", "d-1"))
     parser.add_argument("--output-tag", default=os.getenv("FALCAO_OUTPUT_TAG", ""))
     parser.add_argument("--collections", default=os.getenv("FALCAO_COLLECTIONS", DEFAULT_COLLECTIONS))
+    parser.add_argument("--api-mode", default=os.getenv("FALCAO_API_MODE", "no-auth"))
+    parser.add_argument("--api-path", default=os.getenv("FALCAO_API_PATH", ""))
     parser.add_argument("--request-budget", type=int, default=int(os.getenv("FALCAO_REQUEST_BUDGET", "0")))
     parser.add_argument("--min-delay-ms", type=int, default=int(os.getenv("FALCAO_MIN_DELAY_MS", "30000")))
     parser.add_argument("--max-delay-ms", type=int, default=int(os.getenv("FALCAO_MAX_DELAY_MS", "90000")))
@@ -241,6 +243,8 @@ def collect(args: argparse.Namespace, env: dict[str, str]) -> tuple[int, Path, d
         str(args.max_delay_ms),
         "--collections",
         args.collections,
+        "--api-mode",
+        args.api_mode,
         "--request-budget",
         str(args.request_budget),
         "--non-block-retries",
@@ -253,6 +257,8 @@ def collect(args: argparse.Namespace, env: dict[str, str]) -> tuple[int, Path, d
         str(args.minimum_block_free_minutes),
         "--headless",
     ]
+    if args.api_path:
+        command.extend(["--api-path", args.api_path])
     validation = run([*command, "--validate-only"], env=env, timeout=45)
     if validation.returncode != 0:
         raise RuntimeError(f"invalid Falcao collector configuration: {validation.stderr[-2000:]}")

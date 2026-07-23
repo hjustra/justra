@@ -22,12 +22,17 @@ apt-get install -y \
   ca-certificates \
   curl \
   git \
+  novnc \
+  openbox \
   openssh-client \
   python3 \
   python3-pip \
   python3-venv \
   sudo \
-  unzip
+  unzip \
+  websockify \
+  x11vnc \
+  xvfb
 
 if ! id justra >/dev/null 2>&1; then
   useradd --system --create-home --shell /bin/bash justra

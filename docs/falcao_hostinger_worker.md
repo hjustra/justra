@@ -74,12 +74,21 @@ FALCAO_AZURE_DATA_DIR=/mnt/justra-data
 FALCAO_AZURE_SERVICE=justra
 
 FALCAO_COLLECTIONS=acordaos,sentencas,decisoesmonocraticas,recursorevista,precedentes
+FALCAO_API_MODE=no-auth
+FALCAO_USER_DATA_DIR=/mnt/justra-data/app/falcao_gold_profile
 FALCAO_MIN_DELAY_MS=90000
 FALCAO_MAX_DELAY_MS=180000
 FALCAO_REQUEST_BUDGET=80
 FALCAO_BLOCK_FREE_MINUTES=720
 FALCAO_PLAN_DAYS=90
 ```
+
+`FALCAO_API_MODE` aceita:
+
+- `no-auth`: rota publica atual, `/api/no-auth/pesquisa`.
+- `frontend`: rota usada pelo Falcao logado, `/api/frontend/pesquisa`.
+
+O modo `frontend` exige que o navegador persistente ou CDP tenha uma sessao gov.br/PDPJ valida. O coletor busca o token no storage do proprio navegador e adiciona o header `Authorization` sem registrar o token em logs.
 
 ## Mitigacao de bloqueios
 
@@ -98,7 +107,7 @@ FALCAO_PLAN_DAYS=90
 3. **Fontes oficiais por tribunal.** Manter coletores especificos para repositórios oficiais quando existirem, como Basis TRT2, TST e paginas publicas de jurisprudencia por tribunal.
 4. **BNP/Pangea para precedentes.** Usar o Banco Nacional de Precedentes para precedentes e temas repetitivos, sem depender da mesma janela de Falcao.
 5. **Acesso institucional.** Buscar canal formal com CNJ/CSJT/tribunais para acesso autorizado, limite dedicado ou exportacao em lote. Este e o caminho mais solido se a Justra precisar de historico massivo.
-6. **Sessao autenticada apenas se houver permissao.** Uma conta gov.br ouro pode ajudar se o proprio servico oferecer rotas autenticadas adequadas, mas nao deve ser assumida como aumento de limite no endpoint `no-auth`.
+6. **Sessao autenticada apenas se houver permissao.** Uma conta gov.br ouro usa rotas autenticadas do proprio frontend (`/api/frontend/pesquisa`). Isso deve ser tratado como um modo proprio de coleta, nao como aumento de limite no endpoint `no-auth`.
 7. **Multi-origem com limite global, nao evasao.** VPS adicionais podem dar alta disponibilidade e reduzir dependencia de uma origem falhar, mas nao devem ser usadas para burlar rate limit. Se forem usadas, manter orçamento global central e limites por origem.
 8. **Backlog separado da coleta diaria.** Rodar diario com baixa vazao e previsibilidade; rodar historico em janelas noturnas, com budget proprio e pausas longas.
 
@@ -157,13 +166,60 @@ sudo -u justra env $(sudo cat /etc/justra/falcao-worker.env | xargs) \
 
 ## Login gov.br ouro
 
-O teste atual confirmou que a coleta publica `no-auth` funciona na Hostinger. Se o Falcao passar a exigir autenticacao para algum lote:
+O teste manual no Chrome logado confirmou que o frontend autenticado chama:
 
-1. Subir um Chrome persistente na Hostinger.
-2. Fazer login gov.br ouro uma vez em uma sessao operacional da Justra.
-3. Usar `collect_falcao_direct.mjs --connect-cdp http://127.0.0.1:9228`.
+- `/jurisprudencia-nacional-backend/api/frontend/autocompletar`;
+- `/jurisprudencia-nacional-backend/api/frontend/pesquisa`;
+- `/jurisprudencia-nacional-backend/api/frontend/pesquisa/filtros`.
 
-Esse modo deve ser ativado depois no worker, mas nao e necessario para a coleta validada hoje.
+Todas as chamadas capturadas voltaram `HTTP 200` e `usesNoAuth=false`. O console tambem indicou que o proprio frontend adiciona `Authorization`, por isso o coletor em modo `frontend` tenta reaproveitar o token salvo no storage do navegador logado.
+
+Para salvar a sessao ouro na Hostinger:
+
+1. Instalar o unit `justra-falcao-gold-login.service`.
+2. Iniciar a janela de login na VPS:
+
+```bash
+sudo systemctl start justra-falcao-gold-login.service
+```
+
+3. No Mac, abrir o tunel SSH:
+
+```bash
+ssh -N -L 6080:127.0.0.1:6080 -i ~/.ssh/justra_hostinger_pje_worker root@srv1846791.hstgr.cloud
+```
+
+4. Abrir no navegador local:
+
+```text
+http://127.0.0.1:6080/vnc.html?autoconnect=1&resize=scale
+```
+
+5. Fazer login gov.br ouro/PDPJ/Falcao na janela remota. O navegador esta rodando na VPS, entao cookies e storage ficam em `/mnt/justra-data/app/falcao_gold_profile`.
+6. Depois do login, parar a janela:
+
+```bash
+sudo systemctl stop justra-falcao-gold-login.service
+```
+
+7. Rodar smoke autenticado:
+
+```bash
+sudo -u justra env $(sudo cat /etc/justra/falcao-worker.env | xargs) \
+  FALCAO_API_MODE=frontend \
+  FALCAO_USER_DATA_DIR=/mnt/justra-data/app/falcao_gold_profile \
+  FALCAO_REQUEST_BUDGET=5 \
+  /opt/justra/app/.venv/bin/python -u /opt/justra/app/scripts/falcao_remote_worker.py \
+  --start-date 2026-07-21 \
+  --end-date 2026-07-21 \
+  --collections sentencas \
+  --output-tag smoke_gold_2026-07-21 \
+  --skip-sync
+```
+
+8. Se o smoke retornar `HTTP 200` em `/api/frontend/pesquisa`, configurar `FALCAO_API_MODE=frontend` em `/etc/justra/falcao-worker.env` e reativar a coleta.
+
+Se a sessao expirar, o worker deve pausar com erro de autenticacao e exigir novo login operacional.
 
 ## Estados de falha
 

@@ -1,0 +1,24 @@
+[Unit]
+Description=Justra Falcao gov.br gold login browser
+Wants=network-online.target
+After=network-online.target
+Conflicts=justra-falcao-hostinger.service
+
+[Service]
+Type=simple
+User=justra
+Group=justra
+WorkingDirectory=/opt/justra/app
+EnvironmentFile=/etc/justra/falcao-worker.env
+Environment=FALCAO_AUTH_WAIT_MINUTES=60
+ExecStart=/opt/justra/app/deploy/scripts/falcao_gold_login_session.sh
+Restart=no
+StandardOutput=journal
+StandardError=journal
+NoNewPrivileges=true
+PrivateTmp=false
+ProtectSystem=full
+ReadWritePaths=/mnt/justra-data /mnt/justra-logs /home/justra /tmp
+
+[Install]
+WantedBy=multi-user.target
