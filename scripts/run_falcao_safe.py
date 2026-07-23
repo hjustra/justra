@@ -116,17 +116,6 @@ def main() -> int:
 
     control_path = Path(args.control_path).resolve()
     control = read_control(control_path)
-    if not control.get("enabled", False) or control.get("blocked", False):
-        payload = {
-            "event": "paused_by_control",
-            "checked_at": iso(utc_now()),
-            "network_requests": 0,
-            "control_path": str(control_path),
-        }
-        atomic_json(scheduler_status, payload)
-        print(json.dumps(payload, ensure_ascii=False), flush=True)
-        return 0
-
     requests_path = output_dir / "requests.jsonl"
     checkpoint_path = output_dir / "checkpoint.json"
     request_histories = list((DATA_ROOT / "raw" / "falcao").glob("**/requests.jsonl"))
@@ -152,6 +141,37 @@ def main() -> int:
     }
     if not_before and now < not_before:
         payload = {"event": "cooldown", **common, "network_requests": 0}
+        atomic_json(scheduler_status, payload)
+        print(json.dumps(payload, ensure_ascii=False), flush=True)
+        return 0
+    if control.get("blocked", False):
+        if blocked_at and not control.get("strategy_review_required", False):
+            control = {
+                **control,
+                "enabled": True,
+                "blocked": False,
+                "auto_resumed_after_block_at": iso(now),
+                "updated_at": iso(now),
+            }
+            atomic_json(control_path, control)
+            common["auto_resumed_after_block"] = True
+        else:
+            payload = {
+                "event": "paused_by_control",
+                **common,
+                "network_requests": 0,
+                "control_path": str(control_path),
+            }
+            atomic_json(scheduler_status, payload)
+            print(json.dumps(payload, ensure_ascii=False), flush=True)
+            return 0
+    if not control.get("enabled", False):
+        payload = {
+            "event": "paused_by_control",
+            **common,
+            "network_requests": 0,
+            "control_path": str(control_path),
+        }
         atomic_json(scheduler_status, payload)
         print(json.dumps(payload, ensure_ascii=False), flush=True)
         return 0
