@@ -22,7 +22,9 @@ O usuario final nao participa deste fluxo. A conta gov.br ouro, se for necessari
 9. A Azure pausa `justra.service`, importa no DuckDB com `--append --skip-backup` e religa o servico.
 10. A busca juridica passa a ler os documentos importados.
 
-O mesmo `output_tag` permite checkpoint. Se a coleta diaria ficar parcial, as proximas janelas retomam de onde parou. O worker sempre prioriza o dia incompleto mais antigo dentro do plano antes de abrir um novo D-1, evitando acumular backlog invisivel. A politica inicial mira aproximadamente `10k-11k` documentos por dia, usando `FALCAO_REQUEST_BUDGET=320` por disparo e `25-55s` entre requests. O cooldown de `6h` apos `HTTP 429` evita insistir em janela bloqueada sem cancelar o dia inteiro.
+O mesmo `output_tag` permite checkpoint. Se a coleta diaria ficar parcial, as proximas janelas retomam de onde parou. O worker sempre prioriza o dia incompleto mais antigo dentro do plano antes de abrir um novo D-1, evitando acumular backlog invisivel.
+
+A politica conservadora atual, aplicada depois de bloqueios `HTTP 429`, usa `FALCAO_REQUEST_BUDGET=80` por disparo, `90-180s` entre requests e cooldown de `12h`. Esta politica sacrifica vazao para reduzir a chance de bloqueio repetido. Se o endpoint ficar estavel por varios dias, aumente em degraus pequenos, por exemplo `100`, `120`, `160`, mantendo o mesmo intervalo de delay.
 
 ## Arquivos principais
 
@@ -72,12 +74,40 @@ FALCAO_AZURE_DATA_DIR=/mnt/justra-data
 FALCAO_AZURE_SERVICE=justra
 
 FALCAO_COLLECTIONS=acordaos,sentencas,decisoesmonocraticas,recursorevista,precedentes
-FALCAO_MIN_DELAY_MS=25000
-FALCAO_MAX_DELAY_MS=55000
-FALCAO_REQUEST_BUDGET=320
-FALCAO_BLOCK_FREE_MINUTES=360
+FALCAO_MIN_DELAY_MS=90000
+FALCAO_MAX_DELAY_MS=180000
+FALCAO_REQUEST_BUDGET=80
+FALCAO_BLOCK_FREE_MINUTES=720
 FALCAO_PLAN_DAYS=90
 ```
+
+## Mitigacao de bloqueios
+
+### Controles imediatos
+
+- Manter apenas um worker Falcao ativo por ambiente.
+- Respeitar checkpoint e deduplicacao por `document_id`; nunca reiniciar lote removendo `checkpoint.json` para "ganhar velocidade".
+- Tratar `HTTP 429` como sinal de limite do provedor, nao como erro transitorio simples.
+- Usar cooldown minimo de `12h` apos `429`; se houver dois bloqueios no mesmo dia, manter `strategy_review_required=true` e revisar politica antes de destravar.
+- Aumentar vazao apenas por degraus pequenos e depois de dias sem bloqueio.
+
+### Alternativas para nao depender de uma unica coleta
+
+1. **DataJud como camada processual oficial.** Usar a API Publica do DataJud para metadados, classe, assunto, partes publicas e movimentacoes. Ela nao substitui inteiro teor, mas reduz a necessidade de buscar tudo no Falcao.
+2. **DJEN/DEJT como descoberta diaria.** Usar os diarios para identificar processos e publicacoes recentes; o Falcao fica focado em inteiro teor relevante, nao em varrer tudo.
+3. **Fontes oficiais por tribunal.** Manter coletores especificos para repositórios oficiais quando existirem, como Basis TRT2, TST e paginas publicas de jurisprudencia por tribunal.
+4. **BNP/Pangea para precedentes.** Usar o Banco Nacional de Precedentes para precedentes e temas repetitivos, sem depender da mesma janela de Falcao.
+5. **Acesso institucional.** Buscar canal formal com CNJ/CSJT/tribunais para acesso autorizado, limite dedicado ou exportacao em lote. Este e o caminho mais solido se a Justra precisar de historico massivo.
+6. **Sessao autenticada apenas se houver permissao.** Uma conta gov.br ouro pode ajudar se o proprio servico oferecer rotas autenticadas adequadas, mas nao deve ser assumida como aumento de limite no endpoint `no-auth`.
+7. **Multi-origem com limite global, nao evasao.** VPS adicionais podem dar alta disponibilidade e reduzir dependencia de uma origem falhar, mas nao devem ser usadas para burlar rate limit. Se forem usadas, manter orçamento global central e limites por origem.
+8. **Backlog separado da coleta diaria.** Rodar diario com baixa vazao e previsibilidade; rodar historico em janelas noturnas, com budget proprio e pausas longas.
+
+Referencias oficiais uteis:
+
+- DataJud API Publica: https://www.cnj.jus.br/sistemas/datajud/api-publica/
+- Endpoints DataJud: https://datajud-wiki.cnj.jus.br/api-publica/endpoints/
+- DJEN/Comunicacoes Processuais: https://www.cnj.jus.br/programas-e-acoes/processo-judicial-eletronico-pje/comunicacoes-processuais/
+- Banco Nacional de Precedentes: https://www.cnj.jus.br/tecnologia-da-informacao-e-comunicacao/justica-4-0/banco-nacional-de-precedentes-bnp/
 
 ## Comandos operacionais
 
