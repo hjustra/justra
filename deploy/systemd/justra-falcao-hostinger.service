@@ -1,7 +1,7 @@
 [Unit]
 Description=Justra Falcao Hostinger collector and Azure importer
-Wants=network-online.target
-After=network-online.target
+Wants=network-online.target justra-falcao-gold-login.service
+After=network-online.target justra-falcao-gold-login.service
 
 [Service]
 Type=oneshot
@@ -9,6 +9,7 @@ User=justra
 Group=justra
 WorkingDirectory=/opt/justra/app
 EnvironmentFile=/etc/justra/falcao-worker.env
+ExecStartPre=/opt/justra/app/deploy/scripts/falcao_wait_for_cdp.sh
 ExecStart=/opt/justra/app/.venv/bin/python -u scripts/falcao_remote_worker.py
 Nice=10
 IOSchedulingClass=best-effort

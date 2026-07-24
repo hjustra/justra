@@ -11,20 +11,21 @@ O usuario final nao participa deste fluxo. A conta gov.br ouro, se for necessari
 
 ## Fluxo diario
 
-1. O timer `justra-falcao-hostinger.timer` dispara em 08:00, 12:00, 18:00 e 23:00 America/Sao_Paulo.
-2. O service `justra-falcao-hostinger.service` executa `scripts/falcao_remote_worker.py`.
-3. O worker calcula D-1 por padrao e usa `output_tag=daily_YYYY-MM-DD`.
-4. O worker chama `scripts/run_falcao_safe.py`.
-5. O wrapper chama `scripts/collect_falcao_direct.mjs`.
-6. O raw fica em `/mnt/justra-data/raw/falcao/daily_YYYY-MM-DD`.
-7. Se existir `documents.jsonl`, o worker copia o diretorio para a Azure.
-8. A Azure move o raw para `/mnt/justra-data/raw/falcao/daily_YYYY-MM-DD`.
-9. A Azure pausa `justra.service`, importa no DuckDB com `--append --skip-backup` e religa o servico.
-10. A busca juridica passa a ler os documentos importados.
+1. O service `justra-falcao-gold-login.service` mantem um Chrome autenticado ativo na VPS e expoe CDP somente em `127.0.0.1:9228`.
+2. O timer `justra-falcao-hostinger.timer` dispara em 08:00, 12:00, 18:00 e 23:00 America/Sao_Paulo.
+3. O service `justra-falcao-hostinger.service` espera o CDP ficar pronto e executa `scripts/falcao_remote_worker.py`.
+4. O worker calcula D-1 por padrao e usa `output_tag=daily_YYYY-MM-DD`.
+5. O worker chama `scripts/run_falcao_safe.py`.
+6. O wrapper chama `scripts/collect_falcao_direct.mjs`.
+7. O raw fica em `/mnt/justra-data/raw/falcao/daily_YYYY-MM-DD`.
+8. Se existir `documents.jsonl`, o worker copia o diretorio para a Azure.
+9. A Azure move o raw para `/mnt/justra-data/raw/falcao/daily_YYYY-MM-DD`.
+10. A Azure pausa `justra.service`, importa no DuckDB com `--append --skip-backup` e religa o servico.
+11. A busca juridica passa a ler os documentos importados.
 
 O mesmo `output_tag` permite checkpoint. Se a coleta diaria ficar parcial, as proximas janelas retomam de onde parou. O worker sempre prioriza o dia incompleto mais antigo dentro do plano antes de abrir um novo D-1, evitando acumular backlog invisivel.
 
-A politica conservadora atual, aplicada depois de bloqueios `HTTP 429`, usa `FALCAO_REQUEST_BUDGET=80` por disparo, `90-180s` entre requests e cooldown de `12h`. Esta politica sacrifica vazao para reduzir a chance de bloqueio repetido. Se o endpoint ficar estavel por varios dias, aumente em degraus pequenos, por exemplo `100`, `120`, `160`, mantendo o mesmo intervalo de delay.
+A politica inicial da sessao autenticada usa `FALCAO_REQUEST_BUDGET=10` por disparo, `90-180s` entre requests e cooldown de `12h`. Ela deve permanecer assim durante a validacao da conta ouro. Depois de alguns dias sem `403` ou `429`, aumente em degraus pequenos e meca a vazao antes de cada novo ajuste.
 
 ## Arquivos principais
 
@@ -74,11 +75,12 @@ FALCAO_AZURE_DATA_DIR=/mnt/justra-data
 FALCAO_AZURE_SERVICE=justra
 
 FALCAO_COLLECTIONS=acordaos,sentencas,decisoesmonocraticas,recursorevista,precedentes
-FALCAO_API_MODE=no-auth
+FALCAO_API_MODE=frontend
+FALCAO_CDP_ENDPOINT=http://127.0.0.1:9228
 FALCAO_USER_DATA_DIR=/mnt/justra-data/app/falcao_gold_profile
 FALCAO_MIN_DELAY_MS=90000
 FALCAO_MAX_DELAY_MS=180000
-FALCAO_REQUEST_BUDGET=80
+FALCAO_REQUEST_BUDGET=10
 FALCAO_BLOCK_FREE_MINUTES=720
 FALCAO_PLAN_DAYS=90
 ```
@@ -88,7 +90,7 @@ FALCAO_PLAN_DAYS=90
 - `no-auth`: rota publica atual, `/api/no-auth/pesquisa`.
 - `frontend`: rota usada pelo Falcao logado, `/api/frontend/pesquisa`.
 
-O modo `frontend` exige que o navegador persistente ou CDP tenha uma sessao gov.br/PDPJ valida. O coletor busca o token no storage do proprio navegador e adiciona o header `Authorization` sem registrar o token em logs.
+O modo `frontend` exige que o Chrome persistente conectado por CDP tenha uma sessao gov.br/PDPJ valida. O coletor busca o token no storage do proprio navegador e adiciona o header `Authorization` sem registrar o token em logs. O CDP e o noVNC ficam vinculados a `127.0.0.1` e nao sao expostos publicamente.
 
 ## Mitigacao de bloqueios
 
@@ -176,7 +178,12 @@ Todas as chamadas capturadas voltaram `HTTP 200` e `usesNoAuth=false`. O console
 
 Para salvar a sessao ouro na Hostinger:
 
-1. Instalar o unit `justra-falcao-gold-login.service`.
+1. Instalar e habilitar o unit `justra-falcao-gold-login.service`. Com `FALCAO_AUTH_WAIT_MINUTES=0`, o Chrome permanece ativo ate o servico ser parado.
+
+```bash
+sudo systemctl enable justra-falcao-gold-login.service
+```
+
 2. Iniciar a janela de login na VPS:
 
 ```bash
@@ -196,17 +203,14 @@ http://127.0.0.1:6080/vnc.html?autoconnect=1&resize=scale
 ```
 
 5. Fazer login gov.br ouro/PDPJ/Falcao na janela remota. O navegador esta rodando na VPS, entao cookies e storage ficam em `/mnt/justra-data/app/falcao_gold_profile`.
-6. Depois do login, parar a janela:
-
-```bash
-sudo systemctl stop justra-falcao-gold-login.service
-```
+6. Depois do login, feche apenas o tunel SSH no Mac. Nao pare o servico: o coletor usa a mesma instancia do Chrome por CDP.
 
 7. Rodar smoke autenticado:
 
 ```bash
 sudo -u justra env $(sudo cat /etc/justra/falcao-worker.env | xargs) \
   FALCAO_API_MODE=frontend \
+  FALCAO_CDP_ENDPOINT=http://127.0.0.1:9228 \
   FALCAO_USER_DATA_DIR=/mnt/justra-data/app/falcao_gold_profile \
   FALCAO_REQUEST_BUDGET=5 \
   /opt/justra/app/.venv/bin/python -u /opt/justra/app/scripts/falcao_remote_worker.py \
@@ -217,7 +221,7 @@ sudo -u justra env $(sudo cat /etc/justra/falcao-worker.env | xargs) \
   --skip-sync
 ```
 
-8. Se o smoke retornar `HTTP 200` em `/api/frontend/pesquisa`, configurar `FALCAO_API_MODE=frontend` em `/etc/justra/falcao-worker.env` e reativar a coleta.
+8. Se o smoke retornar `HTTP 200` em `/api/frontend/pesquisa`, configurar `FALCAO_API_MODE=frontend` e `FALCAO_CDP_ENDPOINT=http://127.0.0.1:9228` em `/etc/justra/falcao-worker.env` e reativar a coleta.
 
 Se a sessao expirar, o worker deve pausar com erro de autenticacao e exigir novo login operacional.
 

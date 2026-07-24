@@ -1,8 +1,7 @@
 [Unit]
-Description=Justra Falcao gov.br gold login browser
+Description=Justra Falcao persistent gov.br gold browser
 Wants=network-online.target
 After=network-online.target
-Conflicts=justra-falcao-hostinger.service
 
 [Service]
 Type=simple
@@ -10,9 +9,10 @@ User=justra
 Group=justra
 WorkingDirectory=/opt/justra/app
 EnvironmentFile=/etc/justra/falcao-worker.env
-Environment=FALCAO_AUTH_WAIT_MINUTES=60
+Environment=FALCAO_AUTH_WAIT_MINUTES=0
 ExecStart=/opt/justra/app/deploy/scripts/falcao_gold_login_session.sh
-Restart=no
+Restart=always
+RestartSec=10
 StandardOutput=journal
 StandardError=journal
 NoNewPrivileges=true

@@ -14,7 +14,7 @@ XVFB_SCREEN="${FALCAO_LOGIN_SCREEN:-1440x1000x24}"
 VNC_PORT="${FALCAO_LOGIN_VNC_PORT:-5901}"
 NOVNC_PORT="${FALCAO_LOGIN_NOVNC_PORT:-6080}"
 CDP_PORT="${FALCAO_LOGIN_CDP_PORT:-9228}"
-AUTH_WAIT_MINUTES="${FALCAO_AUTH_WAIT_MINUTES:-60}"
+AUTH_WAIT_MINUTES="${FALCAO_AUTH_WAIT_MINUTES:-0}"
 STATUS_PATH="${DATA_DIR}/app/falcao_gold_login_session.json"
 
 mkdir -p "${PROFILE_DIR}" "${DATA_DIR}/app" "${DATA_DIR}/raw/falcao" "${LOG_DIR}"
@@ -146,16 +146,21 @@ set +e
 CHROME_PID="$!"
 
 RESULT=0
-SECONDS_LEFT=$((AUTH_WAIT_MINUTES * 60))
-while [[ "${SECONDS_LEFT}" -gt 0 ]]; do
-  if ! kill -0 "${CHROME_PID}" >/dev/null 2>&1; then
-    wait "${CHROME_PID}"
-    RESULT="$?"
-    break
-  fi
-  sleep 5
-  SECONDS_LEFT=$((SECONDS_LEFT - 5))
-done
+if [[ "${AUTH_WAIT_MINUTES}" -eq 0 ]]; then
+  wait "${CHROME_PID}"
+  RESULT="$?"
+else
+  SECONDS_LEFT=$((AUTH_WAIT_MINUTES * 60))
+  while [[ "${SECONDS_LEFT}" -gt 0 ]]; do
+    if ! kill -0 "${CHROME_PID}" >/dev/null 2>&1; then
+      wait "${CHROME_PID}"
+      RESULT="$?"
+      break
+    fi
+    sleep 5
+    SECONDS_LEFT=$((SECONDS_LEFT - 5))
+  done
+fi
 set -e
 
 if [[ "${RESULT}" -eq 0 ]]; then
