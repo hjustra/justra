@@ -221,6 +221,8 @@ sudo -u justra env $(sudo cat /etc/justra/falcao-worker.env | xargs) \
 
 Se a sessao expirar, o worker deve pausar com erro de autenticacao e exigir novo login operacional.
 
+O login remoto abre o Chromium diretamente no display virtual, sem controle Playwright. Isso reduz a chance de o CAPTCHA do gov.br rejeitar a tentativa por sinais de automacao. O Playwright volta a ser usado depois, apenas para a coleta com o perfil ja autenticado.
+
 ## Estados de falha
 
 - `HTTP 403` ou `429`: o coletor marca bloqueio em `falcao_control.json` e para.

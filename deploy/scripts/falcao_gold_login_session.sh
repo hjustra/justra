@@ -5,9 +5,8 @@ APP_DIR="${APP_DIR:-/opt/justra/app}"
 DATA_DIR="${JUSTRA_DATA_DIR:-/mnt/justra-data}"
 LOG_DIR="${JUSTRA_LOG_DIR:-/mnt/justra-logs}"
 PROFILE_DIR="${FALCAO_USER_DATA_DIR:-${DATA_DIR}/app/falcao_gold_profile}"
-NODE_BIN="${JUSTRA_NODE_BIN:-/usr/bin/node}"
-NODE_MODULES="${JUSTRA_NODE_MODULES:-/opt/justra/node-runtime/node_modules}"
 PLAYWRIGHT_PATH="${PLAYWRIGHT_BROWSERS_PATH:-/home/justra/.cache/ms-playwright}"
+START_URL="${FALCAO_LOGIN_START_URL:-https://jurisprudencia.jt.jus.br/jurisprudencia-nacional/pesquisa}"
 
 DISPLAY_NUM="${FALCAO_LOGIN_DISPLAY_NUM:-98}"
 DISPLAY_VALUE=":${DISPLAY_NUM}"
@@ -24,9 +23,10 @@ XVFB_PID=""
 OPENBOX_PID=""
 X11VNC_PID=""
 WEBSOCKIFY_PID=""
+CHROME_PID=""
 
 cleanup() {
-  for pid in "${WEBSOCKIFY_PID}" "${X11VNC_PID}" "${OPENBOX_PID}" "${XVFB_PID}"; do
+  for pid in "${CHROME_PID}" "${WEBSOCKIFY_PID}" "${X11VNC_PID}" "${OPENBOX_PID}" "${XVFB_PID}"; do
     if [[ -n "${pid}" ]] && kill -0 "${pid}" >/dev/null 2>&1; then
       kill "${pid}" >/dev/null 2>&1 || true
       wait "${pid}" >/dev/null 2>&1 || true
@@ -79,10 +79,18 @@ if ! command -v websockify >/dev/null 2>&1; then
   echo "websockify nao instalado." >&2
   exit 1
 fi
+CHROME_BIN="${FALCAO_LOGIN_CHROME_BIN:-}"
+if [[ -z "${CHROME_BIN}" ]]; then
+  CHROME_BIN="$(find "${PLAYWRIGHT_PATH}" -type f -path '*/chrome-linux*/chrome' | sort | head -n 1 || true)"
+fi
+if [[ -z "${CHROME_BIN}" || ! -x "${CHROME_BIN}" ]]; then
+  write_status "error" "Chromium/Chrome nao encontrado"
+  echo "Chromium/Chrome nao encontrado em ${PLAYWRIGHT_PATH}." >&2
+  exit 1
+fi
 
 export HOME="${HOME:-/home/justra}"
 export DISPLAY="${DISPLAY_VALUE}"
-export JUSTRA_NODE_MODULES="${NODE_MODULES}"
 export PLAYWRIGHT_BROWSERS_PATH="${PLAYWRIGHT_PATH}"
 export XDG_RUNTIME_DIR="${XDG_RUNTIME_DIR:-/tmp/justra-falcao-runtime}"
 mkdir -p "${XDG_RUNTIME_DIR}"
@@ -123,14 +131,27 @@ echo "noVNC pronto: http://127.0.0.1:${NOVNC_PORT}/vnc.html?autoconnect=1&resize
 echo "Perfil persistente: ${PROFILE_DIR}"
 
 set +e
-"${NODE_BIN}" "${APP_DIR}/scripts/collect_falcao_direct.mjs" \
-  --auth-setup \
-  --auth-wait-minutes "${AUTH_WAIT_MINUTES}" \
-  --user-data-dir "${PROFILE_DIR}" \
-  --api-mode frontend \
-  --headed \
-  --output-tag "falcao_gold_auth_$(date -u +%Y%m%dT%H%M%SZ)"
-RESULT="$?"
+"${CHROME_BIN}" \
+  --user-data-dir="${PROFILE_DIR}" \
+  --no-sandbox \
+  --disable-dev-shm-usage \
+  --window-size=1440,1000 \
+  --lang=pt-BR \
+  "${START_URL}" \
+  >"${LOG_DIR}/falcao-gold-chrome.log" 2>&1 &
+CHROME_PID="$!"
+
+RESULT=0
+SECONDS_LEFT=$((AUTH_WAIT_MINUTES * 60))
+while [[ "${SECONDS_LEFT}" -gt 0 ]]; do
+  if ! kill -0 "${CHROME_PID}" >/dev/null 2>&1; then
+    wait "${CHROME_PID}"
+    RESULT="$?"
+    break
+  fi
+  sleep 5
+  SECONDS_LEFT=$((SECONDS_LEFT - 5))
+done
 set -e
 
 if [[ "${RESULT}" -eq 0 ]]; then
