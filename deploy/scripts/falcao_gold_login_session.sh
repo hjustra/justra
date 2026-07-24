@@ -13,6 +13,7 @@ DISPLAY_VALUE=":${DISPLAY_NUM}"
 XVFB_SCREEN="${FALCAO_LOGIN_SCREEN:-1440x1000x24}"
 VNC_PORT="${FALCAO_LOGIN_VNC_PORT:-5901}"
 NOVNC_PORT="${FALCAO_LOGIN_NOVNC_PORT:-6080}"
+CDP_PORT="${FALCAO_LOGIN_CDP_PORT:-9228}"
 AUTH_WAIT_MINUTES="${FALCAO_AUTH_WAIT_MINUTES:-60}"
 STATUS_PATH="${DATA_DIR}/app/falcao_gold_login_session.json"
 
@@ -38,13 +39,13 @@ trap cleanup EXIT
 write_status() {
   local state="$1"
   local detail="${2:-}"
-  python3 - "${STATUS_PATH}" "${state}" "${detail}" "${PROFILE_DIR}" "${NOVNC_PORT}" "${VNC_PORT}" "${AUTH_WAIT_MINUTES}" <<'PY'
+  python3 - "${STATUS_PATH}" "${state}" "${detail}" "${PROFILE_DIR}" "${NOVNC_PORT}" "${VNC_PORT}" "${CDP_PORT}" "${AUTH_WAIT_MINUTES}" <<'PY'
 import datetime as dt
 import json
 import os
 import sys
 
-path, state, detail, profile_dir, novnc_port, vnc_port, wait_minutes = sys.argv[1:]
+path, state, detail, profile_dir, novnc_port, vnc_port, cdp_port, wait_minutes = sys.argv[1:]
 payload = {
     "state": state,
     "detail": detail,
@@ -52,6 +53,7 @@ payload = {
     "profile_dir": profile_dir,
     "novnc_url": f"http://127.0.0.1:{novnc_port}/vnc.html?autoconnect=1&resize=scale",
     "vnc_port": int(vnc_port),
+    "cdp_endpoint": f"http://127.0.0.1:{cdp_port}",
     "auth_wait_minutes": int(wait_minutes),
 }
 os.makedirs(os.path.dirname(path), exist_ok=True)
@@ -137,6 +139,8 @@ set +e
   --disable-dev-shm-usage \
   --window-size=1440,1000 \
   --lang=pt-BR \
+  --remote-debugging-address=127.0.0.1 \
+  --remote-debugging-port="${CDP_PORT}" \
   "${START_URL}" \
   >"${LOG_DIR}/falcao-gold-chrome.log" 2>&1 &
 CHROME_PID="$!"

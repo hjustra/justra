@@ -967,24 +967,31 @@ async function main() {
     state.cdp_endpoint = args.connectCdp || "";
     state.user_data_dir = args.userDataDir ? path.resolve(args.userDataDir) : "";
     saveState();
-    const navigation = await page.goto(FRONTEND_URL, {
-      waitUntil: "domcontentloaded",
-      timeout: 90_000,
-    });
-    if (!navigation || !navigation.ok()) {
-      const status = navigation?.status() || 0;
-      if ([403, 429].includes(status)) {
-        writeControl({
-          enabled: false,
-          blocked: true,
-          last_block_at: nowIso(),
-          block_status: status,
-          block_url: FRONTEND_URL,
-        });
-        throw new BlockedError(`Frontend respondeu HTTP ${status}.`);
+    const reuseCurrentPage =
+      args.connectCdp && page.url().startsWith(FRONTEND_URL);
+    if (!reuseCurrentPage) {
+      const navigation = await page.goto(FRONTEND_URL, {
+        waitUntil: "domcontentloaded",
+        timeout: 90_000,
+      });
+      if (!navigation || !navigation.ok()) {
+        const status = navigation?.status() || 0;
+        if ([403, 429].includes(status)) {
+          writeControl({
+            enabled: false,
+            blocked: true,
+            last_block_at: nowIso(),
+            block_status: status,
+            block_url: FRONTEND_URL,
+          });
+          throw new BlockedError(`Frontend respondeu HTTP ${status}.`);
+        }
+        throw new Error(`Frontend respondeu HTTP ${status}.`);
       }
-      throw new Error(`Frontend respondeu HTTP ${status}.`);
     }
+    state.reused_current_page = Boolean(reuseCurrentPage);
+    state.current_page_url = page.url();
+    saveState();
     if (args.authSetup) {
       await waitForInteractiveAuth(page, args);
       state.current = null;
