@@ -3,7 +3,7 @@ Description=Run Justra Falcao Hostinger collector
 
 [Timer]
 OnCalendar=*-*-* 00,02,04,06,08,10,12,14,16,18,20,22:05:00 America/Sao_Paulo
-Persistent=true
+Persistent=false
 RandomizedDelaySec=30s
 
 [Install]

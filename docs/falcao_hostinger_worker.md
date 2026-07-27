@@ -13,6 +13,7 @@ O usuario final nao participa deste fluxo. A conta gov.br ouro, se for necessari
 
 1. O service `justra-falcao-gold-login.service` mantem um Chrome autenticado ativo na VPS e expoe CDP somente em `127.0.0.1:9228`.
 2. O timer `justra-falcao-hostinger.timer` dispara a cada duas horas, no minuto 05, em America/Sao_Paulo.
+   Execucoes perdidas durante uma pausa nao sao compensadas, evitando dois lotes em sequencia.
 3. O service `justra-falcao-hostinger.service` espera o CDP ficar pronto e executa `scripts/falcao_remote_worker.py`.
 4. O worker calcula D-1 por padrao e usa `output_tag=daily_YYYY-MM-DD`.
 5. O worker chama `scripts/run_falcao_safe.py`.
