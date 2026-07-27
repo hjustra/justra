@@ -12,7 +12,7 @@ O usuario final nao participa deste fluxo. A conta gov.br ouro, se for necessari
 ## Fluxo diario
 
 1. O service `justra-falcao-gold-login.service` mantem um Chrome autenticado ativo na VPS e expoe CDP somente em `127.0.0.1:9228`.
-2. O timer `justra-falcao-hostinger.timer` dispara uma vez por hora, no minuto 05, em America/Sao_Paulo.
+2. O timer `justra-falcao-hostinger.timer` dispara a cada duas horas, no minuto 05, em America/Sao_Paulo.
 3. O service `justra-falcao-hostinger.service` espera o CDP ficar pronto e executa `scripts/falcao_remote_worker.py`.
 4. O worker calcula D-1 por padrao e usa `output_tag=daily_YYYY-MM-DD`.
 5. O worker chama `scripts/run_falcao_safe.py`.
@@ -25,7 +25,9 @@ O usuario final nao participa deste fluxo. A conta gov.br ouro, se for necessari
 
 O mesmo `output_tag` permite checkpoint. Se a coleta diaria ficar parcial, as proximas janelas retomam de onde parou. O worker sempre prioriza o dia incompleto mais antigo dentro do plano antes de abrir um novo D-1, evitando acumular backlog invisivel.
 
-A politica de capacidade usa `FALCAO_REQUEST_BUDGET=30` por lote horario, `60-120s` entre requests e cooldown de `12h`. Os 24 lotes permitem ate 720 requests por dia. Descontando a descoberta de filtros e particoes, a meta operacional e de aproximadamente 5 mil documentos por dia. O resultado real depende da densidade das particoes, duplicatas e eventuais bloqueios; `403` ou `429` interrompem a coleta imediatamente.
+A politica de capacidade usa `FALCAO_DOCUMENT_LIMIT=500` por lote, teto preventivo de 80 requests, `5-10s` entre requests e cooldown de `12h`. Os 12 lotes permitem ate 6 mil documentos novos por dia. O resultado real depende da densidade das particoes, duplicatas e disponibilidade diaria; `403` ou `429` interrompem a coleta imediatamente.
+
+O limite foi definido depois de um ensaio autenticado sem espera adicional: a API frontend entregou 1.933 documentos em 223 respostas `HTTP 200` e bloqueou a requisicao 224 com `HTTP 429`. Lotes de 500 mantem margem para o particionamento e evitam repetir essa rajada.
 
 `FALCAO_SEQUENCE_START_DATE` fixa o primeiro dia do backlog operacional. O worker prioriza a data fechada mais recente (`D-1`) para manter os documentos novos em dia. Quando essa data esta completa, usa os lotes seguintes para drenar, em ordem, os dias antigos ainda pendentes.
 
@@ -81,10 +83,11 @@ FALCAO_API_MODE=frontend
 FALCAO_CDP_ENDPOINT=http://127.0.0.1:9228
 FALCAO_USER_DATA_DIR=/mnt/justra-data/app/falcao_gold_profile
 FALCAO_FALLBACK_NO_AUTH=1
-FALCAO_SCHEDULE=00:05,01:05,02:05,03:05,04:05,05:05,06:05,07:05,08:05,09:05,10:05,11:05,12:05,13:05,14:05,15:05,16:05,17:05,18:05,19:05,20:05,21:05,22:05,23:05
-FALCAO_MIN_DELAY_MS=60000
-FALCAO_MAX_DELAY_MS=120000
-FALCAO_REQUEST_BUDGET=30
+FALCAO_SCHEDULE=00:05,02:05,04:05,06:05,08:05,10:05,12:05,14:05,16:05,18:05,20:05,22:05
+FALCAO_MIN_DELAY_MS=5000
+FALCAO_MAX_DELAY_MS=10000
+FALCAO_REQUEST_BUDGET=80
+FALCAO_DOCUMENT_LIMIT=500
 FALCAO_BLOCK_FREE_MINUTES=720
 FALCAO_PLAN_DAYS=90
 FALCAO_SEQUENCE_START_DATE=2026-07-21

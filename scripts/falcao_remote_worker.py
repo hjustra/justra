@@ -21,11 +21,11 @@ from justra_runtime_paths import DATA_ROOT, LOG_ROOT  # noqa: E402
 
 APP_TZ = ZoneInfo("America/Sao_Paulo")
 DEFAULT_COLLECTIONS = "acordaos,sentencas,decisoesmonocraticas,recursorevista,precedentes"
-HOURLY_SCHEDULE = ",".join(f"{hour:02d}:05" for hour in range(24))
+TWO_HOURLY_SCHEDULE = ",".join(f"{hour:02d}:05" for hour in range(0, 24, 2))
 DEFAULT_CONTROL = {
     "enabled": True,
     "mode": "d-1",
-    "schedule": HOURLY_SCHEDULE,
+    "schedule": TWO_HOURLY_SCHEDULE,
     "min_delay_ms": 30_000,
     "max_delay_ms": 90_000,
     "page_size": 10,
@@ -83,6 +83,7 @@ def update_control_policy(path: Path, args: argparse.Namespace) -> dict[str, obj
         "min_delay_ms": args.min_delay_ms,
         "max_delay_ms": args.max_delay_ms,
         "request_budget": args.request_budget,
+        "document_limit": args.document_limit,
         "block_free_minutes": args.minimum_block_free_minutes,
         "collections": args.collections.split(","),
     }
@@ -172,6 +173,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--api-mode", default=os.getenv("FALCAO_API_MODE", "no-auth"))
     parser.add_argument("--api-path", default=os.getenv("FALCAO_API_PATH", ""))
     parser.add_argument("--request-budget", type=int, default=int(os.getenv("FALCAO_REQUEST_BUDGET", "0")))
+    parser.add_argument("--document-limit", type=int, default=int(os.getenv("FALCAO_DOCUMENT_LIMIT", "0")))
     parser.add_argument("--min-delay-ms", type=int, default=int(os.getenv("FALCAO_MIN_DELAY_MS", "30000")))
     parser.add_argument("--max-delay-ms", type=int, default=int(os.getenv("FALCAO_MAX_DELAY_MS", "90000")))
     parser.add_argument("--minimum-block-free-minutes", type=int, default=int(os.getenv("FALCAO_BLOCK_FREE_MINUTES", "1440")))
@@ -250,6 +252,8 @@ def collect(args: argparse.Namespace, env: dict[str, str]) -> tuple[int, Path, d
         args.api_mode,
         "--request-budget",
         str(args.request_budget),
+        "--document-limit",
+        str(args.document_limit),
         "--non-block-retries",
         "2",
         "--rest-every",
@@ -426,6 +430,7 @@ def main() -> int:
             "start_date": args.start_date,
             "end_date": args.end_date,
             "collections": args.collections.split(","),
+            "document_limit": args.document_limit,
         },
     )
     sync_worker_state_best_effort(args, status_path, control_path)
@@ -456,6 +461,7 @@ def main() -> int:
             "collector_result": collector_status.get("result"),
             "collector_complete": bool(collector_status.get("complete")),
             "documents": documents_count,
+            "documents_this_run": int(collector_status.get("documents_this_run") or 0),
             "sync": sync_result,
         }
         atomic_json(status_path, final)
