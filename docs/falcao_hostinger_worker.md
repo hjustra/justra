@@ -27,7 +27,7 @@ O mesmo `output_tag` permite checkpoint. Se a coleta diaria ficar parcial, as pr
 
 A politica de capacidade usa `FALCAO_REQUEST_BUDGET=30` por lote horario, `60-120s` entre requests e cooldown de `12h`. Os 24 lotes permitem ate 720 requests por dia. Descontando a descoberta de filtros e particoes, a meta operacional e de aproximadamente 5 mil documentos por dia. O resultado real depende da densidade das particoes, duplicatas e eventuais bloqueios; `403` ou `429` interrompem a coleta imediatamente.
 
-`FALCAO_SEQUENCE_START_DATE` fixa o primeiro dia da fila operacional. O worker percorre todas as datas em ordem e nao salta um dia ausente: so inicia a data seguinte depois que a anterior estiver completa.
+`FALCAO_SEQUENCE_START_DATE` fixa o primeiro dia do backlog operacional. O worker prioriza a data fechada mais recente (`D-1`) para manter os documentos novos em dia. Quando essa data esta completa, usa os lotes seguintes para drenar, em ordem, os dias antigos ainda pendentes.
 
 ## Arquivos principais
 

@@ -141,7 +141,7 @@ def daily_date_from_name(path: Path) -> dt.date | None:
 
 
 def choose_target_date(plan_days: int) -> dt.date:
-    """Process every date in sequence without skipping an uncollected day."""
+    """Keep the newest closed date current, then drain older gaps in sequence."""
     raw_root = DATA_ROOT / "raw" / "falcao"
     start, end = plan_window(plan_days)
     configured_start = os.getenv("FALCAO_SEQUENCE_START_DATE", "").strip()
@@ -150,8 +150,11 @@ def choose_target_date(plan_days: int) -> dt.date:
             start = max(start, dt.date.fromisoformat(configured_start))
         except ValueError as exc:
             raise ValueError("FALCAO_SEQUENCE_START_DATE deve usar YYYY-MM-DD.") from exc
+    latest_status = load_json(raw_root / f"daily_{end.isoformat()}" / "status.json")
+    if not latest_status.get("complete"):
+        return end
     cursor = start
-    while cursor <= end:
+    while cursor < end:
         status = load_json(raw_root / f"daily_{cursor.isoformat()}" / "status.json")
         if not status.get("complete"):
             return cursor
