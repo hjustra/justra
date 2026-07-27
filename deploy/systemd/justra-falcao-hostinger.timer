@@ -2,12 +2,9 @@
 Description=Run Justra Falcao Hostinger collector
 
 [Timer]
-OnCalendar=*-*-* 08:00:00 America/Sao_Paulo
-OnCalendar=*-*-* 13:00:00 America/Sao_Paulo
-OnCalendar=*-*-* 18:00:00 America/Sao_Paulo
-OnCalendar=*-*-* 23:00:00 America/Sao_Paulo
+OnCalendar=*-*-* *:05:00 America/Sao_Paulo
 Persistent=true
-RandomizedDelaySec=10m
+RandomizedDelaySec=30s
 
 [Install]
 WantedBy=timers.target

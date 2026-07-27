@@ -21,10 +21,11 @@ from justra_runtime_paths import DATA_ROOT, LOG_ROOT  # noqa: E402
 
 APP_TZ = ZoneInfo("America/Sao_Paulo")
 DEFAULT_COLLECTIONS = "acordaos,sentencas,decisoesmonocraticas,recursorevista,precedentes"
+HOURLY_SCHEDULE = ",".join(f"{hour:02d}:05" for hour in range(24))
 DEFAULT_CONTROL = {
     "enabled": True,
     "mode": "d-1",
-    "schedule": "08:00,13:00,18:00,23:00",
+    "schedule": HOURLY_SCHEDULE,
     "min_delay_ms": 30_000,
     "max_delay_ms": 90_000,
     "page_size": 10,
@@ -140,23 +141,22 @@ def daily_date_from_name(path: Path) -> dt.date | None:
 
 
 def choose_target_date(plan_days: int) -> dt.date:
-    """Resume the oldest incomplete daily run before opening a new D-1 run."""
+    """Process every date in sequence without skipping an uncollected day."""
     raw_root = DATA_ROOT / "raw" / "falcao"
     start, end = plan_window(plan_days)
-    incomplete: list[dt.date] = []
-    if raw_root.exists():
-        for directory in raw_root.iterdir():
-            if not directory.is_dir():
-                continue
-            day = daily_date_from_name(directory)
-            if day is None or day < start or day > end:
-                continue
-            status = load_json(directory / "status.json")
-            checkpoint = load_json(directory / "checkpoint.json")
-            has_run_evidence = bool(status or checkpoint or (directory / "requests.jsonl").exists())
-            if has_run_evidence and not status.get("complete"):
-                incomplete.append(day)
-    return min(incomplete) if incomplete else end
+    configured_start = os.getenv("FALCAO_SEQUENCE_START_DATE", "").strip()
+    if configured_start:
+        try:
+            start = max(start, dt.date.fromisoformat(configured_start))
+        except ValueError as exc:
+            raise ValueError("FALCAO_SEQUENCE_START_DATE deve usar YYYY-MM-DD.") from exc
+    cursor = start
+    while cursor <= end:
+        status = load_json(raw_root / f"daily_{cursor.isoformat()}" / "status.json")
+        if not status.get("complete"):
+            return cursor
+        cursor += dt.timedelta(days=1)
+    return end
 
 
 def parse_args() -> argparse.Namespace:
