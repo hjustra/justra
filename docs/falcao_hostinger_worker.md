@@ -78,6 +78,7 @@ FALCAO_COLLECTIONS=acordaos,sentencas,decisoesmonocraticas,recursorevista,preced
 FALCAO_API_MODE=frontend
 FALCAO_CDP_ENDPOINT=http://127.0.0.1:9228
 FALCAO_USER_DATA_DIR=/mnt/justra-data/app/falcao_gold_profile
+FALCAO_FALLBACK_NO_AUTH=1
 FALCAO_MIN_DELAY_MS=90000
 FALCAO_MAX_DELAY_MS=180000
 FALCAO_REQUEST_BUDGET=10
@@ -91,6 +92,8 @@ FALCAO_PLAN_DAYS=90
 - `frontend`: rota usada pelo Falcao logado, `/api/frontend/pesquisa`.
 
 O modo `frontend` exige que o Chrome persistente conectado por CDP tenha uma sessao gov.br/PDPJ valida. O coletor busca o token no storage do proprio navegador e adiciona o header `Authorization` sem registrar o token em logs. O CDP e o noVNC ficam vinculados a `127.0.0.1` e nao sao expostos publicamente.
+
+Com `FALCAO_FALLBACK_NO_AUTH=1`, a ausencia do token ou uma resposta `HTTP 401` troca a execucao uma unica vez para `/api/no-auth/pesquisa`. O status registra `fallback_no_auth_used=true` e o controle marca a conta ouro como pendente de reconexao. Se a rota publica responder `403` ou `429`, a protecao existente bloqueia a coleta e aplica o cooldown normalmente.
 
 ## Mitigacao de bloqueios
 

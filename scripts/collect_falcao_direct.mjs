@@ -33,6 +33,12 @@ const CHROME_PATH = process.env.JUSTRA_CHROME_PATH || DEFAULT_CHROME_PATH;
 const MAX_ANONYMOUS_DOCUMENTS = 200;
 const REQUEST_TIMEOUT_MS = 90_000;
 
+function envFlag(name, fallback = false) {
+  const raw = process.env[name];
+  if (raw == null || raw === "") return fallback;
+  return ["1", "true", "yes", "on"].includes(String(raw).trim().toLowerCase());
+}
+
 function browserLaunchOptions(headed, extra = {}) {
   const options = { ...extra, headless: !headed };
   if (CHROME_PATH) options.executablePath = CHROME_PATH;
@@ -173,6 +179,7 @@ function parseArgs(argv) {
     authWaitMinutes: 15,
     apiMode: process.env.FALCAO_API_MODE || "no-auth",
     apiPath: process.env.FALCAO_API_PATH || "",
+    fallbackNoAuth: envFlag("FALCAO_FALLBACK_NO_AUTH", false),
     validateOnly: false,
     mode: "d-1",
   };
@@ -206,6 +213,8 @@ function parseArgs(argv) {
     else if (value === "--headless") args.headed = false;
     else if (value === "--api-mode") args.apiMode = argv[++index];
     else if (value === "--api-path") args.apiPath = argv[++index];
+    else if (value === "--fallback-no-auth") args.fallbackNoAuth = true;
+    else if (value === "--no-fallback-no-auth") args.fallbackNoAuth = false;
     else if (value === "--validate-only") args.validateOnly = true;
     else if (value === "--mode") args.mode = argv[++index];
     // Compatibilidade com o wrapper antigo. O motor direto não usa estes controles.
@@ -495,8 +504,11 @@ async function main() {
     request_elapsed_total_ms: 0,
     status_counts: {},
     block_events: 0,
+    api_mode_requested: args.apiMode,
     api_mode: args.apiMode,
     api_path: args.apiPath,
+    fallback_no_auth_enabled: args.fallbackNoAuth,
+    fallback_no_auth_used: false,
     completed_windows: Object.keys(checkpoint.completed_partitions).length,
     coverage_gaps: checkpoint.gaps.length,
     complete: false,
@@ -581,13 +593,16 @@ async function main() {
     return params;
   }
 
+  let activeApiMode = args.apiMode;
+  let activeApiPath = args.apiPath;
+
   function requestUrl(date, collection, filters, pageNumber, filtersOnly = false) {
     const params = baseParams(date, collection, filters);
     if (!filtersOnly) {
       params.set("page", String(pageNumber));
       params.set("size", String(args.pageSize));
     }
-    return `${API_ORIGIN}${args.apiPath}${filtersOnly ? "/filtros" : ""}?${params}`;
+    return `${API_ORIGIN}${activeApiPath}${filtersOnly ? "/filtros" : ""}?${params}`;
   }
 
   function logRequest(response, context) {
@@ -636,7 +651,36 @@ async function main() {
 
   let page;
   let authHeaders = {};
+
+  function activateNoAuthFallback(reason, failedUrl = "") {
+    if (!args.fallbackNoAuth || activeApiMode !== "frontend") return false;
+    const activatedAt = nowIso();
+    activeApiMode = "no-auth";
+    activeApiPath = API_PATHS["no-auth"];
+    authHeaders = {};
+    state.api_mode = activeApiMode;
+    state.api_path = activeApiPath;
+    state.auth_header_available = false;
+    state.authentication_state = "unavailable";
+    state.fallback_no_auth_used = true;
+    state.fallback_no_auth_reason = reason;
+    state.fallback_no_auth_at = activatedAt;
+    writeControl({
+      gold_account_authenticated: false,
+      gold_account_tested: true,
+      authentication_state: "reauthentication_required",
+      authentication_failed_at: activatedAt,
+      active_api_mode: activeApiMode,
+      fallback_no_auth_used: true,
+      fallback_no_auth_reason: reason,
+      fallback_no_auth_url: failedUrl,
+    });
+    saveState();
+    return true;
+  }
+
   async function apiGet(url, context) {
+    let targetUrl = url;
     for (let attempt = 0; ; attempt += 1) {
       await pace();
       const sampledDelay = nextSampledDelayMs;
@@ -662,13 +706,24 @@ async function main() {
         } finally {
           clearTimeout(timer);
         }
-      }, { target: url, timeoutMs: REQUEST_TIMEOUT_MS, headers: authHeaders });
-      response.url = url;
+      }, { target: targetUrl, timeoutMs: REQUEST_TIMEOUT_MS, headers: authHeaders });
+      response.url = targetUrl;
       response.response_bytes = Buffer.byteLength(response.body || "");
       response.sampled_delay_ms = sampledDelay;
       try {
         logRequest(response, { ...context, attempt: attempt + 1 });
       } catch (error) {
+        if (
+          error instanceof HttpResponseError &&
+          error.status === 401 &&
+          activateNoAuthFallback("http_401", targetUrl)
+        ) {
+          targetUrl = targetUrl.replace(
+            `${API_ORIGIN}${API_PATHS.frontend}`,
+            `${API_ORIGIN}${API_PATHS["no-auth"]}`,
+          );
+          continue;
+        }
         const retryable =
           error instanceof HttpResponseError &&
           (error.status === 400 || error.status === 408 || error.status >= 500);
@@ -1004,7 +1059,11 @@ async function main() {
     if (args.apiMode === "frontend") {
       authHeaders = await authHeadersFromPage(page);
       state.auth_header_available = Boolean(authHeaders.Authorization);
+      state.authentication_state = authHeaders.Authorization ? "authenticated" : "unavailable";
       saveState();
+      if (!authHeaders.Authorization) {
+        activateNoAuthFallback("missing_auth_header");
+      }
     }
 
     let allComplete = true;
