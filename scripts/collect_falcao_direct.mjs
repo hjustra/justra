@@ -1061,7 +1061,20 @@ async function main() {
       state.auth_header_available = Boolean(authHeaders.Authorization);
       state.authentication_state = authHeaders.Authorization ? "authenticated" : "unavailable";
       saveState();
-      if (!authHeaders.Authorization) {
+      if (authHeaders.Authorization) {
+        const verifiedAt = nowIso();
+        writeControl({
+          gold_account_authenticated: true,
+          gold_account_tested: true,
+          authentication_state: "authenticated",
+          authentication_verified_at: verifiedAt,
+          authentication_failed_at: "",
+          active_api_mode: "frontend",
+          fallback_no_auth_used: false,
+          fallback_no_auth_reason: "",
+          fallback_no_auth_url: "",
+        });
+      } else {
         activateNoAuthFallback("missing_auth_header");
       }
     }
