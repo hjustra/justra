@@ -173,6 +173,11 @@ sudo -u justra env $(sudo cat /etc/justra/falcao-worker.env | xargs) \
   --skip-sync
 ```
 
+Para ensaios de capacidade, `collect_falcao_direct.mjs` aceita
+`--document-limit N` (ou `FALCAO_DOCUMENT_LIMIT=N`). A execução para com sucesso
+assim que gravar `N` documentos novos, sem marcar como concluída uma página que
+tenha sido interrompida no meio.
+
 ## Login gov.br ouro
 
 O teste manual no Chrome logado confirmou que o frontend autenticado chama:

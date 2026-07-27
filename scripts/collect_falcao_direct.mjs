@@ -166,6 +166,7 @@ function parseArgs(argv) {
     minDelayMs: 30_000,
     maxDelayMs: 90_000,
     requestBudget: 0,
+    documentLimit: Number(process.env.FALCAO_DOCUMENT_LIMIT || 0),
     nonBlockRetries: 2,
     minimumBlockFreeMinutes: 0,
     blockCooldownMinutes: 2_880,
@@ -195,6 +196,8 @@ function parseArgs(argv) {
       args.maxDelayMs = args.minDelayMs + Number(argv[++index]);
     } else if (value === "--request-budget") {
       args.requestBudget = Number(argv[++index]);
+    } else if (value === "--document-limit") {
+      args.documentLimit = Number(argv[++index]);
     } else if (value === "--non-block-retries") {
       args.nonBlockRetries = Number(argv[++index]);
     } else if (value === "--minimum-block-free-minutes") {
@@ -238,6 +241,7 @@ function parseArgs(argv) {
     minDelayMs: args.minDelayMs,
     maxDelayMs: args.maxDelayMs,
     requestBudget: args.requestBudget,
+    documentLimit: args.documentLimit,
     nonBlockRetries: args.nonBlockRetries,
     minimumBlockFreeMinutes: args.minimumBlockFreeMinutes,
     authWaitMinutes: args.authWaitMinutes,
@@ -251,6 +255,9 @@ function parseArgs(argv) {
   }
   if (!Number.isInteger(args.nonBlockRetries) || args.nonBlockRetries < 0 || args.nonBlockRetries > 5) {
     throw new Error("--non-block-retries deve ser um inteiro entre 0 e 5.");
+  }
+  if (!Number.isInteger(args.documentLimit)) {
+    throw new Error("--document-limit deve ser um inteiro não negativo.");
   }
   if (!Number.isFinite(args.authWaitMinutes) || args.authWaitMinutes < 1 || args.authWaitMinutes > 120) {
     throw new Error("--auth-wait-minutes deve ficar entre 1 e 120.");
@@ -384,6 +391,7 @@ class HttpResponseError extends Error {
   }
 }
 class RequestBudgetReached extends Error {}
+class DocumentLimitReached extends Error {}
 class PausedError extends Error {}
 
 function pickTokenCandidate(value) {
@@ -502,6 +510,7 @@ async function main() {
     duplicate_documents_this_run: 0,
     requests_this_run: 0,
     request_elapsed_total_ms: 0,
+    document_limit: args.documentLimit,
     status_counts: {},
     block_events: 0,
     api_mode_requested: args.apiMode,
@@ -775,8 +784,13 @@ async function main() {
   function ingestDocuments(payload, collection, context) {
     const documents = Array.isArray(payload?.documentos) ? payload.documentos : [];
     let newDocuments = 0;
+    let processedDocuments = 0;
     for (let index = 0; index < documents.length; index += 1) {
+      if (args.documentLimit > 0 && state.documents_this_run >= args.documentLimit) {
+        break;
+      }
       const document = documents[index];
+      processedDocuments += 1;
       const key = documentKey(collection, document);
       if (seen.has(key)) {
         state.duplicate_documents_this_run += 1;
@@ -802,7 +816,13 @@ async function main() {
       newDocuments += 1;
       state.documents_this_run += 1;
     }
-    return { returned: documents.length, newDocuments };
+    return {
+      returned: documents.length,
+      processedDocuments,
+      newDocuments,
+      limitReached:
+        args.documentLimit > 0 && state.documents_this_run >= args.documentLimit,
+    };
   }
 
   function rawPagePath(date, collection, filters, pageNumber) {
@@ -848,13 +868,20 @@ async function main() {
         page: pageNumber,
       });
       returned += ingested.returned;
-      checkpoint.pages[pageKey] = {
-        completed_at: nowIso(),
-        returned: ingested.returned,
-        new_documents: ingested.newDocuments,
-        raw_path: path.relative(ROOT, rawPath),
-      };
+      if (ingested.processedDocuments === ingested.returned) {
+        checkpoint.pages[pageKey] = {
+          completed_at: nowIso(),
+          returned: ingested.returned,
+          new_documents: ingested.newDocuments,
+          raw_path: path.relative(ROOT, rawPath),
+        };
+      }
       saveState();
+      if (ingested.limitReached) {
+        throw new DocumentLimitReached(
+          `Limite de ${args.documentLimit} documentos atingido.`,
+        );
+      }
     }
     if (returned < total) {
       recordGap({
@@ -1145,6 +1172,11 @@ async function main() {
       process.exitCode = 3;
     } else if (error instanceof RequestBudgetReached) {
       state.result = "paused_by_request_budget";
+      process.exitCode = 0;
+    } else if (error instanceof DocumentLimitReached) {
+      state.result = "document_limit_reached";
+      state.stop_reason = error.message;
+      delete state.error;
       process.exitCode = 0;
     } else if (error instanceof PausedError) {
       state.result = "paused_by_control";
