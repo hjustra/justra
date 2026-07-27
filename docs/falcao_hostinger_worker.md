@@ -25,7 +25,7 @@ O usuario final nao participa deste fluxo. A conta gov.br ouro, se for necessari
 
 O mesmo `output_tag` permite checkpoint. Se a coleta diaria ficar parcial, as proximas janelas retomam de onde parou. O worker sempre prioriza o dia incompleto mais antigo dentro do plano antes de abrir um novo D-1, evitando acumular backlog invisivel.
 
-A politica inicial da sessao autenticada usa `FALCAO_REQUEST_BUDGET=10` por disparo, `90-180s` entre requests e cooldown de `12h`. Ela deve permanecer assim durante a validacao da conta ouro. Depois de alguns dias sem `403` ou `429`, aumente em degraus pequenos e meca a vazao antes de cada novo ajuste.
+A politica atual usa `FALCAO_REQUEST_BUDGET=50` por disparo, `90-180s` entre requests e cooldown de `12h`. Como cada pagina retorna ate 10 documentos e parte do budget e consumida pela descoberta de filtros, a expectativa pratica e de aproximadamente 200-400 documentos por rodada. Aumente novamente apenas depois de observar varios ciclos sem `403` ou `429`.
 
 ## Arquivos principais
 
@@ -81,7 +81,7 @@ FALCAO_USER_DATA_DIR=/mnt/justra-data/app/falcao_gold_profile
 FALCAO_FALLBACK_NO_AUTH=1
 FALCAO_MIN_DELAY_MS=90000
 FALCAO_MAX_DELAY_MS=180000
-FALCAO_REQUEST_BUDGET=10
+FALCAO_REQUEST_BUDGET=50
 FALCAO_BLOCK_FREE_MINUTES=720
 FALCAO_PLAN_DAYS=90
 ```
