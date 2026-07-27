@@ -24,7 +24,7 @@ DEFAULT_COLLECTIONS = "acordaos,sentencas,decisoesmonocraticas,recursorevista,pr
 DEFAULT_CONTROL = {
     "enabled": True,
     "mode": "d-1",
-    "schedule": "08:00,12:00,18:00,23:00",
+    "schedule": "08:00,13:00,18:00,23:00",
     "min_delay_ms": 30_000,
     "max_delay_ms": 90_000,
     "page_size": 10,

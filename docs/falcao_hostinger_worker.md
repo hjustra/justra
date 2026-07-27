@@ -12,7 +12,7 @@ O usuario final nao participa deste fluxo. A conta gov.br ouro, se for necessari
 ## Fluxo diario
 
 1. O service `justra-falcao-gold-login.service` mantem um Chrome autenticado ativo na VPS e expoe CDP somente em `127.0.0.1:9228`.
-2. O timer `justra-falcao-hostinger.timer` dispara em 08:00, 12:00, 18:00 e 23:00 America/Sao_Paulo.
+2. O timer `justra-falcao-hostinger.timer` dispara em 08:00, 13:00, 18:00 e 23:00 America/Sao_Paulo.
 3. O service `justra-falcao-hostinger.service` espera o CDP ficar pronto e executa `scripts/falcao_remote_worker.py`.
 4. O worker calcula D-1 por padrao e usa `output_tag=daily_YYYY-MM-DD`.
 5. O worker chama `scripts/run_falcao_safe.py`.
@@ -25,7 +25,7 @@ O usuario final nao participa deste fluxo. A conta gov.br ouro, se for necessari
 
 O mesmo `output_tag` permite checkpoint. Se a coleta diaria ficar parcial, as proximas janelas retomam de onde parou. O worker sempre prioriza o dia incompleto mais antigo dentro do plano antes de abrir um novo D-1, evitando acumular backlog invisivel.
 
-A politica atual usa `FALCAO_REQUEST_BUDGET=50` por disparo, `90-180s` entre requests e cooldown de `12h`. Como cada pagina retorna ate 10 documentos e parte do budget e consumida pela descoberta de filtros, a expectativa pratica e de aproximadamente 200-400 documentos por rodada. Aumente novamente apenas depois de observar varios ciclos sem `403` ou `429`.
+A politica de capacidade usa `FALCAO_REQUEST_BUDGET=160` por disparo, `60-120s` entre requests e cooldown de `12h`. As quatro rodadas permitem ate 640 requests por dia. Descontando a descoberta de filtros e particoes, a meta operacional e de aproximadamente 5 mil documentos por dia. O resultado real depende da densidade das particoes, duplicatas e eventuais bloqueios; `403` ou `429` interrompem a coleta imediatamente.
 
 ## Arquivos principais
 
@@ -79,9 +79,10 @@ FALCAO_API_MODE=frontend
 FALCAO_CDP_ENDPOINT=http://127.0.0.1:9228
 FALCAO_USER_DATA_DIR=/mnt/justra-data/app/falcao_gold_profile
 FALCAO_FALLBACK_NO_AUTH=1
-FALCAO_MIN_DELAY_MS=90000
-FALCAO_MAX_DELAY_MS=180000
-FALCAO_REQUEST_BUDGET=50
+FALCAO_SCHEDULE=08:00,13:00,18:00,23:00
+FALCAO_MIN_DELAY_MS=60000
+FALCAO_MAX_DELAY_MS=120000
+FALCAO_REQUEST_BUDGET=160
 FALCAO_BLOCK_FREE_MINUTES=720
 FALCAO_PLAN_DAYS=90
 ```
